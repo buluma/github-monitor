@@ -13,6 +13,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+workflow_dispatch:
+
 jobs:
   test:
     name: Node.js ${{ matrix.node-version }}
