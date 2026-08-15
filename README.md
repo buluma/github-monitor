@@ -149,6 +149,8 @@ All optional except your chosen auth path. Set via environment or `.env`.
 | `DEPENDABOT_QUEUE_THRESHOLD` | Enables Dependabot cleanup (disabled by default); its value (`1`–`5000`) is the queued workflow-run depth that additionally triggers run cancellation |
 | `DEPENDABOT_QUEUE_OWNERS` | Optional comma-separated owner allowlist for automatic cleanup |
 | `ETAG_CACHE_DISABLED` | Set to `1` to disable conditional-request caching (debugging) |
+| `HISTORY_ENABLED` | Set to `1` to enable local scan history (disabled by default)
+| `HISTORY_DIR` | Directory for scan history JSONL files (default: `~/.local/share/github-monitor/history`) |
 
 ### Dashboard controls
 

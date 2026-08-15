@@ -515,17 +515,18 @@ function githubUrl(path, query = {}) {
 const etagCache = new Map();
 const ETAG_CACHE_DISABLED = process.env.ETAG_CACHE_DISABLED === "1";
 const ETAG_CACHEABLE_METHODS = new Set(["GET", "HEAD"]);
-const HISTORY_ENABLED = process.env.HISTORY_ENABLED === "1";
-const HISTORY_DIR = process.env.HISTORY_DIR || join(homedir(), ".local", "share", "github-monitor", "history");
+function historyEnabled() {
+  return process.env.HISTORY_ENABLED === "1";
+}
+
+function historyBasePath() {
+  return process.env.HISTORY_DIR || join(homedir(), ".local", "share", "github-monitor", "history");
+}
 const HISTORY_MAX_FILE_BYTES = 50 * 1024 * 1024;
 const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 function isEtagCacheEnabled() {
   return !ETAG_CACHE_DISABLED;
-}
-
-function historyBasePath() {
-  return HISTORY_DIR;
 }
 
 function historyFilePath(now = new Date()) {
@@ -536,14 +537,14 @@ function historyFilePath(now = new Date()) {
 }
 
 async function ensureHistoryDir() {
-  if (!HISTORY_ENABLED) return null;
+  if (!historyEnabled()) return null;
   const base = historyBasePath();
   await mkdir(base, { recursive: true });
   return base;
 }
 
 async function appendHistorySnapshot(snapshot) {
-  if (!HISTORY_ENABLED) return;
+  if (!historyEnabled()) return;
   try {
     const dir = await ensureHistoryDir();
     if (!dir) return;
@@ -557,7 +558,7 @@ async function appendHistorySnapshot(snapshot) {
 }
 
 async function readHistoryFiles(since) {
-  if (!HISTORY_ENABLED) return [];
+  if (!historyEnabled()) return [];
   const base = historyBasePath();
   const cutoff = since ? new Date(since).getTime() : Date.now() - HISTORY_RETENTION_MS;
   const entries = [];
@@ -565,8 +566,8 @@ async function readHistoryFiles(since) {
     const years = await readdir(base).catch(() => []);
     for (const year of years) {
       const yearDir = join(base, year);
-      const stat = await stat(yearDir).catch(() => null);
-      if (!stat?.isDirectory()) continue;
+      const s = await stat(yearDir).catch(() => null);
+      if (!s?.isDirectory()) continue;
       const months = await readdir(yearDir).catch(() => []);
       for (const month of months) {
         const filePath = join(yearDir, month);
@@ -3638,7 +3639,7 @@ let historySummaryCacheAt = 0;
 const HISTORY_SUMMARY_CACHE_TTL_MS = 60 * 1000;
 
 async function getHistorySummary() {
-  if (!HISTORY_ENABLED) return null;
+  if (!historyEnabled()) return null;
   const now = Date.now();
   if (historySummaryCache && now - historySummaryCacheAt < HISTORY_SUMMARY_CACHE_TTL_MS) {
     return historySummaryCache;
@@ -3661,7 +3662,7 @@ const server = http.createServer(async (req, res) => {
         });
         data.history = await getHistorySummary();
         await sendJson(res, 200, data);
-        if (HISTORY_ENABLED) {
+        if (historyEnabled()) {
           const quota = snapshotRateLimit(scanMetrics.getStore() || createScanMetrics());
           const tightest = quota.tightest || {};
           appendHistorySnapshot({
@@ -3733,14 +3734,14 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/history/scans") {
       const since = requestUrl.searchParams.get("since");
       const entries = await readHistoryFiles(since);
-      await sendJson(res, 200, { entries, enabled: HISTORY_ENABLED });
+      await sendJson(res, 200, { entries, enabled: historyEnabled() });
       return;
     }
     if (requestUrl.pathname === "/api/history/summary") {
       const since = requestUrl.searchParams.get("since");
       const entries = await readHistoryFiles(since);
       const summary = summarizeHistory(entries);
-      await sendJson(res, 200, { ...summary, enabled: HISTORY_ENABLED });
+      await sendJson(res, 200, { ...summary, enabled: historyEnabled() });
       return;
     }
     await sendStatic(req, res);
@@ -3812,5 +3813,9 @@ export {
   runDependabotQueueScan,
   resetDependabotCleanupState,
   sameAutoMergeOwners,
+  appendHistorySnapshot,
+  readHistoryFiles,
+  summarizeHistory,
+  getHistorySummary,
   server
 };

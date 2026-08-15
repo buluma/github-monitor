@@ -28,7 +28,7 @@ const PHASE_THRESHOLDS_MS = {
   action_running: 4 * 60 * 60 * 1000,
   cd_running: 4 * 60 * 60 * 1000,
   deployment_running: 45 * 60 * 1000,
-  runner_busy: 2 * 60 * 60 * 1000
+  runner_busy: 2 * 60 * 60 * 1000,
 };
 const REFRESH_RETRY_DELAYS_MS = [15_000, 30_000, 60_000, 120_000, 300_000];
 const QUOTA_SLOW_REMAINING = 200;
@@ -54,7 +54,11 @@ const state = {
   filter: persisted.filter || "",
   theme: persisted.theme === "light" ? "light" : "dark",
   notifications: persisted.notifications !== false,
-  owners: Array.isArray(persisted.owners) ? persisted.owners.filter((value) => typeof value === "string" && value.trim()) : [],
+  owners: Array.isArray(persisted.owners)
+    ? persisted.owners.filter(
+        (value) => typeof value === "string" && value.trim(),
+      )
+    : [],
   accounts: [],
   ownerPickerOpen: false,
   activitySnapshot: null,
@@ -78,7 +82,7 @@ const state = {
   closed: new Set(),
   autoMerges: new Map(),
   autoMergeTicker: null,
-  autoMergeFollowUpTimer: null
+  autoMergeFollowUpTimer: null,
 };
 
 const views = {
@@ -87,90 +91,110 @@ const views = {
     title: "PRs and workflow runs that need attention",
     empty: "Nothing failing. Quiet day on the desk.",
     color: "red",
-    rows: (data) => [...(data.pullRequests.fail || []), ...(data.actions?.failed || [])]
+    rows: (data) => [
+      ...(data.pullRequests.fail || []),
+      ...(data.actions?.failed || []),
+    ],
   },
   conflicts: {
     kicker: "Merge conflicts",
     title: "PRs blocked until rebased",
     empty: "No PRs with merge conflicts.",
     color: "red",
-    rows: (data) => data.pullRequests.conflicts || []
+    rows: (data) => data.pullRequests.conflicts || [],
   },
   running: {
     kicker: "Open PRs with CI running",
     title: "Checks still in motion",
     empty: "No checks or workflow runs currently running.",
     color: "amber",
-    rows: (data) => [...(data.pullRequests.running || []), ...(data.actions?.running || [])]
+    rows: (data) => [
+      ...(data.pullRequests.running || []),
+      ...(data.actions?.running || []),
+    ],
   },
   pass: {
     kicker: "Passing CI",
     title: "Ready PRs with completed checks",
     empty: "No PRs passing CI yet.",
     color: "green",
-    rows: (data) => data.pullRequests.pass
+    rows: (data) => data.pullRequests.pass,
   },
   noCi: {
     kicker: "No CI",
     title: "Ready PRs without reported checks",
     empty: "No ready PRs without CI.",
     color: "gray",
-    rows: (data) => data.pullRequests.noCi || []
+    rows: (data) => data.pullRequests.noCi || [],
   },
   runningCd: {
     kicker: "Running CD Actions",
     title: "Deploy and release workflows in progress",
     empty: "Nothing deploying right now.",
     color: "blue",
-    rows: (data) => data.cd.running
+    rows: (data) => data.cd.running,
   },
   finishedCd: {
     kicker: "Finished CD Actions",
     title: "Deploy and release workflows finished in the last day",
     empty: "No CD actions finished in the last day.",
     color: "green",
-    rows: (data) => data.cd.finished || []
+    rows: (data) => data.cd.finished || [],
   },
   deployments: {
     kicker: "Running Deployments",
     title: "GitHub deployments not finished yet",
     empty: "No active deployments.",
     color: "violet",
-    rows: (data) => data.deployments.running
+    rows: (data) => data.deployments.running,
   },
   runners: {
     kicker: "Busy Self-hosted Runners",
     title: "Runner capacity currently occupied",
     empty: "All self-hosted runners are idle.",
     color: "gray",
-    rows: (data) => data.runners.busy
+    rows: (data) => data.runners.busy,
   },
   failedCd: {
     kicker: "Failed CD Actions",
     title: "CD workflows still failing",
     empty: "No CD workflows are still failing.",
     color: "ink",
-    rows: (data) => data.cd.failed
+    rows: (data) => data.cd.failed,
   },
   pipelineTraces: {
     kicker: "Pipeline tracing",
     title: "PR journeys from CI to production",
     empty: "No PR journeys in this trace filter.",
     color: "red",
-    rows: (data) => traceRows(data)
+    rows: (data) => traceRows(data),
   },
   history: {
     kicker: "Scan history",
     title: "Local scan snapshots over time",
-    empty: HISTORY_ENABLED
-      ? "No scan history yet. Enable history with HISTORY_ENABLED=1 and wait for scans."
-      : "History is disabled. Set HISTORY_ENABLED=1 to enable local scan history.",
+    empty: (data) =>
+      data?.history?.enabled
+        ? "No scan history yet. Enable history with HISTORY_ENABLED=1 and wait for scans."
+        : "History is disabled. Set HISTORY_ENABLED=1 to enable local scan history.",
     color: "ink",
-    rows: (data) => data.history?.entries || []
-  }
+    rows: (data) => data.history?.entries || [],
+  },
 };
 
-const viewOrder = ["fail", "conflicts", "running", "pass", "noCi", "pipelineTraces", "runningCd", "finishedCd", "deployments", "runners", "failedCd", "history"];
+const viewOrder = [
+  "fail",
+  "conflicts",
+  "running",
+  "pass",
+  "noCi",
+  "pipelineTraces",
+  "runningCd",
+  "finishedCd",
+  "deployments",
+  "runners",
+  "failedCd",
+  "history",
+];
 
 const els = {
   account: document.querySelector("#account"),
@@ -210,7 +234,7 @@ const els = {
   ownerPickerPanel: document.querySelector("#ownerPickerPanel"),
   ownerPickerList: document.querySelector("#ownerPickerList"),
   ownerPickerAll: document.querySelector("#ownerPickerAll"),
-  ownerPickerClose: document.querySelector("#ownerPickerClose")
+  ownerPickerClose: document.querySelector("#ownerPickerClose"),
 };
 
 const metricIds = {
@@ -227,7 +251,7 @@ const metricIds = {
   shippedJourneys: "metricTraceShipped",
   tracingUnknown: "metricTraceUnknown",
   repos: "metricRepos",
-  scans: "metricHistoryScans"
+  scans: "metricHistoryScans",
 };
 
 const navIds = {
@@ -242,14 +266,18 @@ const navIds = {
   runners: "navRunners",
   failedCd: "navFailedCd",
   pipelineTraces: "navPipelineTraces",
-  history: "navHistory"
+  history: "navHistory",
 };
 
 let lastGeneratedAt = null;
 let generatedTicker = null;
-const notificationWorkerPromise = "serviceWorker" in navigator
-  ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null)
-  : Promise.resolve(null);
+const notificationWorkerPromise =
+  "serviceWorker" in navigator
+    ? navigator.serviceWorker
+        .register("/sw.js")
+        .then(() => navigator.serviceWorker.ready)
+        .catch(() => null)
+    : Promise.resolve(null);
 
 function loadPersisted() {
   try {
@@ -382,7 +410,9 @@ function dismissRow(key) {
 function restoreRow(keys) {
   const list = normalizeDismissKeys(keys);
   if (!list.some((key) => state.dismissed[key])) return;
-  list.forEach((key) => { delete state.dismissed[key]; });
+  list.forEach((key) => {
+    delete state.dismissed[key];
+  });
   saveDismissed();
   render();
 }
@@ -397,7 +427,9 @@ function visibleDismissKeyGroups() {
   if (!view) return [];
   const query = state.filter.trim().toLowerCase();
   const rows = view.rows(data) || [];
-  const filtered = query ? rows.filter((row) => rowText(row).includes(query)) : rows;
+  const filtered = query
+    ? rows.filter((row) => rowText(row).includes(query))
+    : rows;
   // Auto-dismissed rows are the server's call, not the user's: bulk dismiss and
   // bulk restore both leave them alone.
   return filtered
@@ -407,10 +439,14 @@ function visibleDismissKeyGroups() {
 }
 
 function dismissAllVisible() {
-  const groups = visibleDismissKeyGroups().filter((keys) => !anyDismissed(keys));
+  const groups = visibleDismissKeyGroups().filter(
+    (keys) => !anyDismissed(keys),
+  );
   if (!groups.length) return;
   const now = new Date().toISOString();
-  groups.forEach((keys) => { state.dismissed[keys[0]] = now; });
+  groups.forEach((keys) => {
+    state.dismissed[keys[0]] = now;
+  });
   saveDismissed();
   render();
 }
@@ -418,7 +454,9 @@ function dismissAllVisible() {
 function restoreAllVisible() {
   const groups = visibleDismissKeyGroups().filter((keys) => anyDismissed(keys));
   if (!groups.length) return;
-  groups.flat().forEach((key) => { delete state.dismissed[key]; });
+  groups.flat().forEach((key) => {
+    delete state.dismissed[key];
+  });
   saveDismissed();
   render();
 }
@@ -434,7 +472,8 @@ function pruneInbox(items) {
 }
 
 function traceTimestamp(trace) {
-  const value = trace?.lastEvidenceAt || trace?.startedAt || trace?.updatedAt || 0;
+  const value =
+    trace?.lastEvidenceAt || trace?.startedAt || trace?.updatedAt || 0;
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : 0;
 }
@@ -459,7 +498,10 @@ function pruneTraceCache(items) {
 function saveInbox() {
   try {
     state.inbox = pruneInbox(state.inbox);
-    localStorage.setItem(INBOX_KEY, JSON.stringify(state.inbox.slice(0, INBOX_MAX)));
+    localStorage.setItem(
+      INBOX_KEY,
+      JSON.stringify(state.inbox.slice(0, INBOX_MAX)),
+    );
   } catch {}
 }
 
@@ -475,10 +517,16 @@ function prunePhaseAges(ages) {
   const entries = Object.entries(ages || {})
     .filter(([, entry]) => {
       if (!entry || typeof entry !== "object") return false;
-      const observed = new Date(entry.observedAt || entry.enteredAt || 0).getTime();
+      const observed = new Date(
+        entry.observedAt || entry.enteredAt || 0,
+      ).getTime();
       return Number.isFinite(observed) && now - observed <= PHASE_AGE_TTL_MS;
     })
-    .sort((a, b) => new Date(b[1].observedAt || 0).getTime() - new Date(a[1].observedAt || 0).getTime())
+    .sort(
+      (a, b) =>
+        new Date(b[1].observedAt || 0).getTime() -
+        new Date(a[1].observedAt || 0).getTime(),
+    )
     .slice(0, PHASE_AGE_MAX);
   return Object.fromEntries(entries);
 }
@@ -495,8 +543,8 @@ function persist() {
         theme: state.theme,
         autoMerge: state.autoMerge,
         notifications: state.notifications,
-        owners: state.owners
-      })
+        owners: state.owners,
+      }),
     );
   } catch {}
 }
@@ -506,14 +554,15 @@ function isBackendUrl(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
     const parts = host.split(".");
-    return parts.some((part) =>
-      part === "api" ||
-      part === "backend" ||
-      part === "srv" ||
-      part.startsWith("api-") ||
-      part.endsWith("-api") ||
-      part.startsWith("backend-") ||
-      part.endsWith("-backend")
+    return parts.some(
+      (part) =>
+        part === "api" ||
+        part === "backend" ||
+        part === "srv" ||
+        part.startsWith("api-") ||
+        part.endsWith("-api") ||
+        part.startsWith("backend-") ||
+        part.endsWith("-backend"),
     );
   } catch {
     return false;
@@ -537,7 +586,7 @@ function formatTime(value) {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(date);
 }
 
@@ -594,7 +643,7 @@ function traceDismissKeys(row) {
     repo && number ? `trace:${repo}#${number}` : "",
     repo && number ? `trace:${repo}:${number}` : "",
     row?.prUrl ? `trace:${row.prUrl}` : "",
-    row?.url ? `trace:${row.url}` : ""
+    row?.url ? `trace:${row.url}` : "",
   ]);
 }
 
@@ -621,7 +670,9 @@ function isAutoDismissed(row) {
 // Whether a row is hidden from the active list, for any reason.
 function rowIsDismissed(row, keys) {
   if (isAutoDismissed(row)) return true;
-  const list = normalizeDismissKeys(keys === undefined ? dismissKeys(row) : keys);
+  const list = normalizeDismissKeys(
+    keys === undefined ? dismissKeys(row) : keys,
+  );
   return list.length > 0 && anyDismissed(list);
 }
 
@@ -630,7 +681,7 @@ function flattenTraces(traces) {
     ...(traces?.flagged || []),
     ...(traces?.active || []),
     ...(traces?.completed || []),
-    ...(traces?.unknown || [])
+    ...(traces?.unknown || []),
   ];
 }
 
@@ -639,7 +690,7 @@ function groupTraceRows(rows) {
     flagged: rows.filter((row) => row.status === "flagged"),
     active: rows.filter((row) => row.status === "active"),
     completed: rows.filter((row) => row.status === "completed"),
-    unknown: rows.filter((row) => row.status === "unknown")
+    unknown: rows.filter((row) => row.status === "unknown"),
   };
 }
 
@@ -658,7 +709,7 @@ function mergeTraceData(data) {
   // resurrected from cache as a stale "in flight" card. All non-terminal states
   // are taken straight from the fresh scan.
   const shippedHistory = state.traceCache.filter(
-    (trace) => trace.status === "completed" && !freshKeys.has(traceKey(trace))
+    (trace) => trace.status === "completed" && !freshKeys.has(traceKey(trace)),
   );
   state.traceCache = pruneTraceCache([...fresh, ...shippedHistory]);
   saveTraceCache();
@@ -670,21 +721,27 @@ function mergeTraceData(data) {
       flaggedJourneys: grouped.flagged.length,
       activeJourneys: grouped.active.length,
       shippedJourneys: grouped.completed.length,
-      tracingUnknown: grouped.unknown.length
+      tracingUnknown: grouped.unknown.length,
     },
-    traces: grouped
+    traces: grouped,
   });
 }
 
 function flattenText(value) {
   if (value == null) return [];
   if (Array.isArray(value)) return value.flatMap(flattenText);
-  if (typeof value === "object") return Object.values(value).flatMap(flattenText);
+  if (typeof value === "object")
+    return Object.values(value).flatMap(flattenText);
   return [String(value)];
 }
 
 function actionKey(row) {
-  return row?.url || [row?.repo, row?.workflow, row?.runNumber, row?.number].filter(Boolean).join(":");
+  return (
+    row?.url ||
+    [row?.repo, row?.workflow, row?.runNumber, row?.number]
+      .filter(Boolean)
+      .join(":")
+  );
 }
 
 function prKey(row) {
@@ -713,19 +770,23 @@ function currentPrPhase(row) {
 }
 
 function phaseLabel(phase) {
-  return {
-    ci_running: "CI running",
-    merge_pending: "Merging",
-    auto_merge_waiting: "Auto merge",
-    passing_ci: "Passing CI",
-    no_ci: "No CI",
-    failing_ci: "Failing CI",
-    conflicts: "Conflict",
-    action_running: "Workflow running",
-    cd_running: "CD running",
-    deployment_running: "Deployment",
-    runner_busy: "Runner busy"
-  }[phase] || phase || "State";
+  return (
+    {
+      ci_running: "CI running",
+      merge_pending: "Merging",
+      auto_merge_waiting: "Auto merge",
+      passing_ci: "Passing CI",
+      no_ci: "No CI",
+      failing_ci: "Failing CI",
+      conflicts: "Conflict",
+      action_running: "Workflow running",
+      cd_running: "CD running",
+      deployment_running: "Deployment",
+      runner_busy: "Runner busy",
+    }[phase] ||
+    phase ||
+    "State"
+  );
 }
 
 function phaseThreshold(phase) {
@@ -741,7 +802,10 @@ function rememberPhase(key, phase, fallbackEnteredAt = "") {
     return previous;
   }
   const fallbackTime = new Date(fallbackEnteredAt || 0).getTime();
-  const enteredAt = Number.isFinite(fallbackTime) && fallbackTime > 0 ? new Date(fallbackTime).toISOString() : now;
+  const enteredAt =
+    Number.isFinite(fallbackTime) && fallbackTime > 0
+      ? new Date(fallbackTime).toISOString()
+      : now;
   const next = { phase, enteredAt, observedAt: now };
   state.phaseAges[key] = next;
   return next;
@@ -763,7 +827,7 @@ function decoratePhase(row, phase, key, fallbackEnteredAt = "") {
     phaseEnteredAt: entry?.enteredAt || "",
     phaseAgeMs: ageMs,
     phaseThresholdMs: thresholdMs,
-    phaseStale: Boolean(thresholdMs && ageMs > thresholdMs)
+    phaseStale: Boolean(thresholdMs && ageMs > thresholdMs),
   };
 }
 
@@ -778,7 +842,10 @@ function stalePhaseTraces(rows = []) {
     .map((row) => ({
       id: `stale-phase:${row.phase}:${prKey(row)}`,
       status: "flagged",
-      severity: row.phase === "merge_pending" || row.phase === "ci_running" ? "high" : "medium",
+      severity:
+        row.phase === "merge_pending" || row.phase === "ci_running"
+          ? "high"
+          : "medium",
       repo: row.repo,
       prNumber: row.number,
       numberLabel: row.numberLabel,
@@ -790,11 +857,12 @@ function stalePhaseTraces(rows = []) {
       rule: { source: "state age" },
       nextAction: { label: "Open PR", url: row.url },
       evidence: [
-        { label: `${row.phaseLabel} since ${formatTime(row.phaseEnteredAt) || "first observed"}`, url: row.url }
+        {
+          label: `${row.phaseLabel} since ${formatTime(row.phaseEnteredAt) || "first observed"}`,
+          url: row.url,
+        },
       ],
-      stages: [
-        { key: row.phase, label: row.phaseLabel, status: "blocked" }
-      ]
+      stages: [{ key: row.phase, label: row.phaseLabel, status: "blocked" }],
     }));
 }
 
@@ -805,40 +873,58 @@ function annotateDataWithPhaseAges(data) {
     noCi: (data.pullRequests?.noCi || []).map(decoratePr),
     fail: (data.pullRequests?.fail || []).map(decoratePr),
     running: (data.pullRequests?.running || []).map(decoratePr),
-    conflicts: (data.pullRequests?.conflicts || []).map(decoratePr)
+    conflicts: (data.pullRequests?.conflicts || []).map(decoratePr),
   };
   const actions = {
     ...(data.actions || {}),
     running: (data.actions?.running || []).map((row) =>
-      decoratePhase(row, "action_running", workflowPhaseKey(row, "action_running"), row.createdAt)
-    )
+      decoratePhase(
+        row,
+        "action_running",
+        workflowPhaseKey(row, "action_running"),
+        row.createdAt,
+      ),
+    ),
   };
   const cd = {
     ...(data.cd || {}),
     running: (data.cd?.running || []).map((row) =>
-      decoratePhase(row, "cd_running", workflowPhaseKey(row, "cd_running"), row.createdAt)
-    )
+      decoratePhase(
+        row,
+        "cd_running",
+        workflowPhaseKey(row, "cd_running"),
+        row.createdAt,
+      ),
+    ),
   };
   const deployments = {
     ...(data.deployments || {}),
     running: (data.deployments?.running || []).map((row) =>
-      decoratePhase(row, "deployment_running", workflowPhaseKey(row, "deployment_running"), row.createdAt)
-    )
+      decoratePhase(
+        row,
+        "deployment_running",
+        workflowPhaseKey(row, "deployment_running"),
+        row.createdAt,
+      ),
+    ),
   };
   const runners = {
     ...(data.runners || {}),
     busy: (data.runners?.busy || []).map((row) =>
-      decoratePhase(row, "runner_busy", workflowPhaseKey(row, "runner_busy"))
-    )
+      decoratePhase(row, "runner_busy", workflowPhaseKey(row, "runner_busy")),
+    ),
   };
   const staleTraces = stalePhaseTraces([
     ...pullRequests.pass,
     ...pullRequests.noCi,
     ...pullRequests.fail,
     ...pullRequests.running,
-    ...pullRequests.conflicts
+    ...pullRequests.conflicts,
   ]);
-  const traces = groupTraceRows([...staleTraces, ...flattenTraces(data.traces)]);
+  const traces = groupTraceRows([
+    ...staleTraces,
+    ...flattenTraces(data.traces),
+  ]);
   savePhaseAges();
   return {
     ...data,
@@ -853,8 +939,8 @@ function annotateDataWithPhaseAges(data) {
       flaggedJourneys: traces.flagged.length,
       activeJourneys: traces.active.length,
       shippedJourneys: traces.completed.length,
-      tracingUnknown: traces.unknown.length
-    }
+      tracingUnknown: traces.unknown.length,
+    },
   };
 }
 
@@ -910,19 +996,23 @@ function clearAutoMergeFollowUp() {
 
 function updateAutoMergeButtons() {
   let hasMerging = false;
-  document.querySelectorAll(".merge-button[data-auto-merge='true']").forEach((button) => {
-    const key = mergeKey(button.dataset.repo, button.dataset.number);
-    const label = autoMergeButtonLabel(key);
-    const isPending = label === "Merging";
-    if (isPending) hasMerging = true;
-    button.textContent = label;
-    button.setAttribute(
-      "aria-label",
-      `${label} ${button.dataset.repo || ""} #${button.dataset.number || ""}`.trim()
-    );
-    button.title = isPending ? "Merging pull request..." : "Automatically merge when the timer reaches zero";
-    if (isPending) button.disabled = true;
-  });
+  document
+    .querySelectorAll(".merge-button[data-auto-merge='true']")
+    .forEach((button) => {
+      const key = mergeKey(button.dataset.repo, button.dataset.number);
+      const label = autoMergeButtonLabel(key);
+      const isPending = label === "Merging";
+      if (isPending) hasMerging = true;
+      button.textContent = label;
+      button.setAttribute(
+        "aria-label",
+        `${label} ${button.dataset.repo || ""} #${button.dataset.number || ""}`.trim(),
+      );
+      button.title = isPending
+        ? "Merging pull request..."
+        : "Automatically merge when the timer reaches zero";
+      if (isPending) button.disabled = true;
+    });
   if (hasMerging) ensureAutoMergeFollowUp();
   else clearAutoMergeFollowUp();
   stopAutoMergeTickerIfIdle();
@@ -940,7 +1030,7 @@ function syncAutoMerges(data) {
     if (!Number.isFinite(deadline)) continue;
     state.autoMerges.set(mergeKey(candidate.repo, candidate.number), {
       deadline,
-      error: candidate.error || ""
+      error: candidate.error || "",
     });
   }
   if (state.autoMerges.size) ensureAutoMergeTicker();
@@ -964,11 +1054,12 @@ async function configureServerAutoMerge() {
       enabled: state.autoMerge,
       mode: state.mode,
       jobs: 4,
-      owners: state.owners
-    })
+      owners: state.owners,
+    }),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Unable to configure auto merge");
+  if (!response.ok)
+    throw new Error(data.error || "Unable to configure auto merge");
   applyAutoMergeSnapshot(data);
   return data;
 }
@@ -983,14 +1074,20 @@ function buildActivitySnapshot(data) {
     ...(data?.pullRequests?.noCi || []),
     ...(data?.pullRequests?.fail || []),
     ...(data?.pullRequests?.running || []),
-    ...(data?.pullRequests?.conflicts || [])
+    ...(data?.pullRequests?.conflicts || []),
   ];
   return {
     includeCd: Boolean(data?.options?.includeCd),
-    ci: new Map((data?.pullRequests?.running || []).map((row) => [prKey(row), row])),
+    ci: new Map(
+      (data?.pullRequests?.running || []).map((row) => [prKey(row), row]),
+    ),
     cd: new Map((data?.cd?.running || []).map((row) => [actionKey(row), row])),
-    conflicts: new Set(allPrs.filter((row) => row.hasConflict).map((row) => prKey(row))),
-    traces: new Map(flattenTraces(data?.traces).map((row) => [traceKey(row), row]))
+    conflicts: new Set(
+      allPrs.filter((row) => row.hasConflict).map((row) => prKey(row)),
+    ),
+    traces: new Map(
+      flattenTraces(data?.traces).map((row) => [traceKey(row), row]),
+    ),
   };
 }
 
@@ -1031,7 +1128,7 @@ async function showBrowserNotification(title, body, tag) {
         renotify: true,
         icon: "/favicon.svg",
         badge: "/favicon.svg",
-        data: { url: window.location.href }
+        data: { url: window.location.href },
       });
       return true;
     }
@@ -1039,7 +1136,7 @@ async function showBrowserNotification(title, body, tag) {
       body,
       tag,
       renotify: true,
-      icon: "/favicon.svg"
+      icon: "/favicon.svg",
     });
     setTimeout(() => notification.close(), 10000);
     return true;
@@ -1074,7 +1171,7 @@ function recordInbox(entry) {
     body: entry.body,
     url: entry.url || "",
     at: new Date().toISOString(),
-    read: false
+    read: false,
   };
   state.inbox.unshift(item);
   state.inbox = state.inbox.slice(0, INBOX_MAX);
@@ -1094,7 +1191,7 @@ async function sendPopup(title, body, tag, options = {}) {
     tag,
     url: options.url || "",
     kind: options.kind || "info",
-    tone: options.tone || "info"
+    tone: options.tone || "info",
   });
   if (!state.notifications) return;
   showToast(title, body);
@@ -1106,16 +1203,21 @@ function notifyCompletedActions(previousSnapshot, data) {
   const nextSnapshot = buildActivitySnapshot(data);
   const completedPrs = [
     ...(data?.pullRequests?.pass || []),
-    ...(data?.pullRequests?.fail || [])
+    ...(data?.pullRequests?.fail || []),
   ];
-  const completedPrByKey = new Map(completedPrs.map((row) => [prKey(row), row]));
+  const completedPrByKey = new Map(
+    completedPrs.map((row) => [prKey(row), row]),
+  );
 
   for (const [key] of previousSnapshot.ci) {
     if (nextSnapshot.ci.has(key)) continue;
     const completed = completedPrByKey.get(key);
     if (!completed) continue;
     const stateLabel = completed.state === "pass" ? "passed" : "failed";
-    const reason = completed.state === "fail" ? `. Reason: ${failureDetail(completed, "CI failed")}` : "";
+    const reason =
+      completed.state === "fail"
+        ? `. Reason: ${failureDetail(completed, "CI failed")}`
+        : "";
     sendPopup(
       `CI ${stateLabel}`,
       `${completed.repo} ${completed.numberLabel}: ${completed.title}${reason}`,
@@ -1123,8 +1225,8 @@ function notifyCompletedActions(previousSnapshot, data) {
       {
         url: completed.url,
         kind: "ci",
-        tone: completed.state === "pass" ? "success" : "danger"
-      }
+        tone: completed.state === "pass" ? "success" : "danger",
+      },
     );
   }
 
@@ -1133,7 +1235,7 @@ function notifyCompletedActions(previousSnapshot, data) {
     ...(data?.pullRequests?.noCi || []),
     ...(data?.pullRequests?.fail || []),
     ...(data?.pullRequests?.running || []),
-    ...(data?.pullRequests?.conflicts || [])
+    ...(data?.pullRequests?.conflicts || []),
   ];
   const prByKey = new Map(allPrs.map((row) => [prKey(row), row]));
   for (const key of nextSnapshot.conflicts) {
@@ -1144,7 +1246,7 @@ function notifyCompletedActions(previousSnapshot, data) {
       "Merge conflict",
       `${pr.repo} ${pr.numberLabel}: ${pr.title}`,
       `conflict:${key}`,
-      { url: pr.url, kind: "conflict", tone: "danger" }
+      { url: pr.url, kind: "conflict", tone: "danger" },
     );
   }
 
@@ -1165,25 +1267,42 @@ function notifyCompletedActions(previousSnapshot, data) {
         "Pipeline flagged",
         `${trace.repo} ${trace.numberLabel || `#${trace.prNumber}`}: ${trace.reason || trace.title}`,
         flaggedTag,
-        { url: trace.nextAction?.url || trace.prUrl, kind: "trace", tone: "danger" }
+        {
+          url: trace.nextAction?.url || trace.prUrl,
+          kind: "trace",
+          tone: "danger",
+        },
       );
     } else if (trace.status === "flagged") {
       // Still flagged from a prior scan: keep the dedup entry warm so a long-lived
       // condition never ages past the window and re-announces itself.
-      if (wasNotified(`trace:${key}:flagged`)) markNotified(`trace:${key}:flagged`);
-    } else if (trace.status === "completed" && previous && previous.status !== "completed") {
+      if (wasNotified(`trace:${key}:flagged`))
+        markNotified(`trace:${key}:flagged`);
+    } else if (
+      trace.status === "completed" &&
+      previous &&
+      previous.status !== "completed"
+    ) {
       sendPopup(
         "Pipeline complete",
         `${trace.repo} ${trace.numberLabel || `#${trace.prNumber}`}: ${trace.reason || "production CD completed."}`,
         `trace:${key}:completed`,
-        { url: trace.nextAction?.url || trace.prUrl, kind: "trace", tone: "success" }
+        {
+          url: trace.nextAction?.url || trace.prUrl,
+          kind: "trace",
+          tone: "success",
+        },
       );
     }
   }
 
   if (!previousSnapshot.includeCd || !nextSnapshot.includeCd) return;
-  const failedCdByKey = new Map((data?.cd?.failed || []).map((row) => [actionKey(row), row]));
-  const finishedCdByKey = new Map((data?.cd?.finished || []).map((row) => [actionKey(row), row]));
+  const failedCdByKey = new Map(
+    (data?.cd?.failed || []).map((row) => [actionKey(row), row]),
+  );
+  const finishedCdByKey = new Map(
+    (data?.cd?.finished || []).map((row) => [actionKey(row), row]),
+  );
   for (const [key, previous] of previousSnapshot.cd) {
     if (nextSnapshot.cd.has(key)) continue;
     const failed = failedCdByKey.get(key);
@@ -1212,8 +1331,8 @@ function notifyCompletedActions(previousSnapshot, data) {
       {
         url: failed?.url || finished?.url || previous.url,
         kind: "cd",
-        tone
-      }
+        tone,
+      },
     );
   }
 }
@@ -1227,11 +1346,16 @@ function setLoading(isLoading) {
 function setError(message, tone = "error") {
   els.errorPanel.textContent = message || "";
   els.errorPanel.classList.toggle("hidden", !message);
-  els.errorPanel.classList.toggle("warning", Boolean(message) && tone === "warning");
+  els.errorPanel.classList.toggle(
+    "warning",
+    Boolean(message) && tone === "warning",
+  );
 }
 
 function dashboardWarning(data) {
-  const warnings = Array.isArray(data?.warnings) ? data.warnings.filter(Boolean) : [];
+  const warnings = Array.isArray(data?.warnings)
+    ? data.warnings.filter(Boolean)
+    : [];
   return warnings.join(" ");
 }
 
@@ -1250,7 +1374,8 @@ function ensureCountdownTimer() {
 function ensureGeneratedTicker() {
   if (generatedTicker) return;
   generatedTicker = setInterval(() => {
-    if (lastGeneratedAt) els.generatedAt.textContent = formatRelative(lastGeneratedAt);
+    if (lastGeneratedAt)
+      els.generatedAt.textContent = formatRelative(lastGeneratedAt);
   }, 30000);
 }
 
@@ -1265,7 +1390,9 @@ function quotaBlockFromRateLimit(rateLimit) {
   const limit = Math.max(1, Number(tightest.limit) || 1);
   const remainingRatio = remaining / limit;
   const absoluteApplies = limit >= QUOTA_ABSOLUTE_LIMIT_FLOOR;
-  const low = remainingRatio < QUOTA_SLOW_RATIO || (absoluteApplies && remaining < QUOTA_SLOW_REMAINING);
+  const low =
+    remainingRatio < QUOTA_SLOW_RATIO ||
+    (absoluteApplies && remaining < QUOTA_SLOW_REMAINING);
   if (!low) return null;
   const resetAt = tightest.resetAt || "";
   const resetTime = new Date(resetAt).getTime();
@@ -1275,7 +1402,7 @@ function quotaBlockFromRateLimit(rateLimit) {
     resetAt,
     retryAt: new Date(resetTime + 30_000).toISOString(),
     remaining,
-    limit
+    limit,
   };
 }
 
@@ -1289,7 +1416,7 @@ function quotaRefreshBlock(data = state.data) {
         resource: quota.resource || "GitHub",
         retryAt,
         remaining: quota.remaining,
-        limit: quota.limit
+        limit: quota.limit,
       };
     }
   }
@@ -1301,10 +1428,13 @@ function updateRefreshButtonState() {
   const disabled = Boolean(state.loading || quotaBlock);
   els.refresh.disabled = disabled;
   els.refresh.classList.toggle("loading", Boolean(state.loading));
-  els.refresh.classList.toggle("quota-blocked", Boolean(quotaBlock && !state.loading));
+  els.refresh.classList.toggle(
+    "quota-blocked",
+    Boolean(quotaBlock && !state.loading),
+  );
   els.refresh.setAttribute(
     "aria-label",
-    quotaBlock ? "Refresh paused until GitHub API quota resets" : "Refresh now"
+    quotaBlock ? "Refresh paused until GitHub API quota resets" : "Refresh now",
   );
   els.refresh.title = quotaBlock
     ? `Refresh paused for ${quotaBlock.resource} API quota until ${formatTime(quotaBlock.retryAt)}`
@@ -1313,9 +1443,11 @@ function updateRefreshButtonState() {
 
 function quotaBlockMessage(block) {
   if (!block) return "";
-  const quota = Number.isFinite(Number(block.remaining)) && Number.isFinite(Number(block.limit))
-    ? ` (${block.remaining}/${block.limit})`
-    : "";
+  const quota =
+    Number.isFinite(Number(block.remaining)) &&
+    Number.isFinite(Number(block.limit))
+      ? ` (${block.remaining}/${block.limit})`
+      : "";
   return `${block.resource} API quota is low${quota}. Refresh is paused until ${formatTime(block.retryAt)}.`;
 }
 
@@ -1325,22 +1457,27 @@ function renderRefreshPauseNotice(quotaBlock) {
   let reason = "";
 
   if (quotaBlock) {
-    const quota = Number.isFinite(Number(quotaBlock.remaining)) && Number.isFinite(Number(quotaBlock.limit))
-      ? ` (${quotaBlock.remaining}/${quotaBlock.limit})`
-      : "";
+    const quota =
+      Number.isFinite(Number(quotaBlock.remaining)) &&
+      Number.isFinite(Number(quotaBlock.limit))
+        ? ` (${quotaBlock.remaining}/${quotaBlock.limit})`
+        : "";
     title = "Live updates paused";
     detail = `${quotaBlock.resource} API quota is too low${quota}. No new GitHub data will be pulled until ${formatTime(quotaBlock.retryAt)}. Pulling resumes automatically.`;
     reason = "quota";
   } else if (!els.autoRefresh.checked) {
     title = "Automatic pulling paused";
-    detail = "New GitHub data will only be pulled when you use Refresh. Turn Auto back on to resume automatic updates.";
+    detail =
+      "New GitHub data will only be pulled when you use Refresh. Turn Auto back on to resume automatic updates.";
     reason = "manual";
   }
 
   const hidden = !reason;
   if (!hidden) {
-    if (els.refreshPauseTitle.textContent !== title) els.refreshPauseTitle.textContent = title;
-    if (els.refreshPauseDetail.textContent !== detail) els.refreshPauseDetail.textContent = detail;
+    if (els.refreshPauseTitle.textContent !== title)
+      els.refreshPauseTitle.textContent = title;
+    if (els.refreshPauseDetail.textContent !== detail)
+      els.refreshPauseDetail.textContent = detail;
     els.refreshPauseNotice.dataset.reason = reason;
   }
   els.refreshPauseNotice.classList.toggle("hidden", hidden);
@@ -1357,7 +1494,7 @@ function rateLimitTooltip(tightest, quotaState, quotaBlock, rateLimit) {
   const reset = formatTime(tightest.resetAt);
   const buckets = Array.isArray(rateLimit?.buckets) ? rateLimit.buckets : [];
   const installationCount = new Set(
-    buckets.map((b) => b.installationKey).filter((key) => key && key !== "pat")
+    buckets.map((b) => b.installationKey).filter((key) => key && key !== "pat"),
   ).size;
   const multiBucket = installationCount > 1;
 
@@ -1371,7 +1508,13 @@ function rateLimitTooltip(tightest, quotaState, quotaBlock, rateLimit) {
     const headerScope = `${resource} on ${tightest.installationKey} is the tightest of ${buckets.length} quota buckets across ${installationCount} GitHub App installations observed so far`;
     body = `${headerScope}. This bucket: ${labelBucket(tightest)}.`;
     const others = buckets
-      .filter((b) => !(b.installationKey === tightest.installationKey && b.resource === tightest.resource))
+      .filter(
+        (b) =>
+          !(
+            b.installationKey === tightest.installationKey &&
+            b.resource === tightest.resource
+          ),
+      )
       .slice(0, 5);
     if (others.length) {
       const lines = others.map((b) => `  ${labelBucket(b)}`);
@@ -1379,8 +1522,14 @@ function rateLimitTooltip(tightest, quotaState, quotaBlock, rateLimit) {
       const hidden = buckets.length - 1 - others.length;
       if (hidden > 0) body += `\n  …and ${hidden} more`;
     }
-    const totalRemaining = buckets.reduce((sum, b) => sum + (Number(b.remaining) || 0), 0);
-    const totalLimit = buckets.reduce((sum, b) => sum + (Number(b.limit) || 0), 0);
+    const totalRemaining = buckets.reduce(
+      (sum, b) => sum + (Number(b.remaining) || 0),
+      0,
+    );
+    const totalLimit = buckets.reduce(
+      (sum, b) => sum + (Number(b.limit) || 0),
+      0,
+    );
     body += `\n\nEach installation has its own quota. The chip shows the bucket closest to depletion because that's what throttles first. Total observed capacity: ${totalRemaining}/${totalLimit}.`;
   } else {
     body = `${resource} is the GitHub API quota bucket used by this scan. ${remaining} of ${limit} requests remain until it resets at ${reset}.`;
@@ -1409,16 +1558,30 @@ function renderRefreshStatus() {
   }
 
   if (tightest) {
-    const quotaState = quotaBlock ? "low" : data?.refresh?.quota?.status === "watch" ? "watch" : "";
-    const buckets = Array.isArray(data?.rateLimit?.buckets) ? data.rateLimit.buckets : [];
+    const quotaState = quotaBlock
+      ? "low"
+      : data?.refresh?.quota?.status === "watch"
+        ? "watch"
+        : "";
+    const buckets = Array.isArray(data?.rateLimit?.buckets)
+      ? data.rateLimit.buckets
+      : [];
     const installationCount = new Set(
-      buckets.map((b) => b.installationKey).filter((key) => key && key !== "pat")
+      buckets
+        .map((b) => b.installationKey)
+        .filter((key) => key && key !== "pat"),
     ).size;
-    const bucketSuffix = installationCount > 1
-      ? ` · +${buckets.length - 1} bucket${buckets.length - 1 === 1 ? "" : "s"}`
-      : "";
+    const bucketSuffix =
+      installationCount > 1
+        ? ` · +${buckets.length - 1} bucket${buckets.length - 1 === 1 ? "" : "s"}`
+        : "";
     els.rateLimit.textContent = `${tightest.resource}: ${tightest.remaining}/${tightest.limit}${quotaState ? ` · ${quotaState}` : ""} · resets ${formatTime(tightest.resetAt)}${bucketSuffix}`;
-    const tooltip = rateLimitTooltip(tightest, quotaState, quotaBlock, data?.rateLimit);
+    const tooltip = rateLimitTooltip(
+      tightest,
+      quotaState,
+      quotaBlock,
+      data?.rateLimit,
+    );
     els.rateLimit.title = tooltip;
     els.rateLimit.setAttribute("aria-label", tooltip);
   } else if (data?.rateLimit) {
@@ -1427,7 +1590,8 @@ function renderRefreshStatus() {
     els.rateLimit.setAttribute("aria-label", els.rateLimit.title);
   } else {
     els.rateLimit.textContent = "Quota: waiting";
-    els.rateLimit.title = "GitHub API quota will appear after the first scan finishes.";
+    els.rateLimit.title =
+      "GitHub API quota will appear after the first scan finishes.";
     els.rateLimit.setAttribute("aria-label", els.rateLimit.title);
   }
   renderRefreshPauseNotice(quotaBlock);
@@ -1444,7 +1608,10 @@ function scheduleAutoRefresh(data) {
 
   state.nextRefreshAt = data.refresh.nextRefreshAt;
   state.refreshReason = data.refresh.reason;
-  const delay = Math.max(5000, new Date(state.nextRefreshAt).getTime() - Date.now());
+  const delay = Math.max(
+    5000,
+    new Date(state.nextRefreshAt).getTime() - Date.now(),
+  );
   state.refreshTimer = setTimeout(() => refresh({ source: "auto" }), delay);
   ensureCountdownTimer();
   renderRefreshStatus();
@@ -1459,12 +1626,19 @@ function scheduleRefreshRetry() {
   }
 
   const quotaBlock = quotaRefreshBlock();
-  const quotaDelay = quotaBlock ? new Date(quotaBlock.retryAt).getTime() - Date.now() : 0;
-  const retryDelay = REFRESH_RETRY_DELAYS_MS[Math.min(state.refreshRetryCount, REFRESH_RETRY_DELAYS_MS.length - 1)];
+  const quotaDelay = quotaBlock
+    ? new Date(quotaBlock.retryAt).getTime() - Date.now()
+    : 0;
+  const retryDelay =
+    REFRESH_RETRY_DELAYS_MS[
+      Math.min(state.refreshRetryCount, REFRESH_RETRY_DELAYS_MS.length - 1)
+    ];
   const delay = Math.max(5000, quotaBlock ? quotaDelay : retryDelay);
   state.refreshRetryCount += 1;
   state.nextRefreshAt = new Date(Date.now() + delay).toISOString();
-  state.refreshReason = quotaBlock ? `Paused for ${quotaBlock.resource} API quota` : "retrying after error";
+  state.refreshReason = quotaBlock
+    ? `Paused for ${quotaBlock.resource} API quota`
+    : "retrying after error";
   state.refreshTimer = setTimeout(() => refresh({ source: "retry" }), delay);
   ensureCountdownTimer();
   renderRefreshStatus();
@@ -1489,7 +1663,11 @@ async function refreshAfterMutation(source) {
     return;
   }
 
-  if (els.autoRefresh.checked && state.refreshTimer && scheduledRefreshDelayMs() > 1000) {
+  if (
+    els.autoRefresh.checked &&
+    state.refreshTimer &&
+    scheduledRefreshDelayMs() > 1000
+  ) {
     renderRefreshStatus();
     return;
   }
@@ -1504,10 +1682,20 @@ function buildParams() {
     includeTraces: "1",
     includeRunners: els.includeRunners.checked ? "1" : "0",
     includeRepoRunners: "0",
-    jobs: "4"
+    jobs: "4",
   });
   if (state.owners.length) params.set("owners", state.owners.join(","));
   return params;
+}
+
+async function fetchHistoryScans() {
+  try {
+    const response = await fetch("/api/history/scans");
+    if (!response.ok) return {};
+    return await response.json();
+  } catch {
+    return {};
+  }
 }
 
 async function refresh({ source = "manual" } = {}) {
@@ -1524,7 +1712,10 @@ async function refresh({ source = "manual" } = {}) {
   setLoading(true);
   setError("");
   try {
-    const response = await fetch(`/api/status?${buildParams().toString()}`);
+    const [response, historyData] = await Promise.all([
+      fetch(`/api/status?${buildParams().toString()}`),
+      fetchHistoryScans(),
+    ]);
     const data = await response.json();
     if (!response.ok) {
       if (data.rateLimit) {
@@ -1534,7 +1725,10 @@ async function refresh({ source = "manual" } = {}) {
       throw new Error(data.error || "Unable to refresh dashboard");
     }
     if (data.autoMerge) applyAutoMergeSnapshot(data.autoMerge);
-    const mergedData = mergeTraceData(data);
+    const mergedData = mergeTraceData({
+      ...data,
+      history: { ...(data.history || {}), ...historyData },
+    });
     notifyCompletedActions(state.activitySnapshot, mergedData);
     state.activitySnapshot = buildActivitySnapshot(mergedData);
     state.data = mergedData;
@@ -1551,7 +1745,8 @@ async function refresh({ source = "manual" } = {}) {
 
 function updateTabTitle(data) {
   const failing = adjustedSummary(data).failingPrs ?? 0;
-  document.title = failing > 0 ? `(${failing}) PR Command Deck` : "PR Command Deck";
+  document.title =
+    failing > 0 ? `(${failing}) PR Command Deck` : "PR Command Deck";
 }
 
 function applyTheme(theme) {
@@ -1564,7 +1759,10 @@ function applyTheme(theme) {
 // automatically by the server (see isAutoDismissed).
 function dismissedInLane(rows, keyFn) {
   if (!Array.isArray(rows)) return 0;
-  return rows.reduce((count, row) => count + (rowIsDismissed(row, keyFn(row)) ? 1 : 0), 0);
+  return rows.reduce(
+    (count, row) => count + (rowIsDismissed(row, keyFn(row)) ? 1 : 0),
+    0,
+  );
 }
 
 // The scoreboard tiles and rail counts come from the server summary, which has
@@ -1585,9 +1783,20 @@ function adjustedSummary(data) {
     ...summary,
     failingPrs: Math.max(0, (summary.failingPrs ?? 0) - failDismissed),
     runningPrs: Math.max(0, (summary.runningPrs ?? 0) - runningDismissed),
-    failedCd: Math.max(0, (summary.failedCd ?? 0) - dismissedInLane(data?.cd?.failed, actionKey)),
-    flaggedJourneys: Math.max(0, (summary.flaggedJourneys ?? 0) - dismissedInLane(data?.traces?.flagged, traceDismissKeys)),
-    tracingUnknown: Math.max(0, (summary.tracingUnknown ?? 0) - dismissedInLane(data?.traces?.unknown, traceDismissKeys))
+    failedCd: Math.max(
+      0,
+      (summary.failedCd ?? 0) - dismissedInLane(data?.cd?.failed, actionKey),
+    ),
+    flaggedJourneys: Math.max(
+      0,
+      (summary.flaggedJourneys ?? 0) -
+        dismissedInLane(data?.traces?.flagged, traceDismissKeys),
+    ),
+    tracingUnknown: Math.max(
+      0,
+      (summary.tracingUnknown ?? 0) -
+        dismissedInLane(data?.traces?.unknown, traceDismissKeys),
+    ),
   };
 }
 
@@ -1603,22 +1812,31 @@ function filteredVisibleRows(rows, isDismissable = () => false) {
 function displayCounts(data) {
   const counts = adjustedSummary(data);
   if (!state.filter.trim()) return counts;
-  const traceFlagged = filteredVisibleRows(data?.traces?.flagged, traceDismissKeys).length;
+  const traceFlagged = filteredVisibleRows(
+    data?.traces?.flagged,
+    traceDismissKeys,
+  ).length;
   const traceActive = filteredVisibleRows(data?.traces?.active).length;
   const traceCompleted = filteredVisibleRows(data?.traces?.completed).length;
-  const traceUnknown = filteredVisibleRows(data?.traces?.unknown, traceDismissKeys).length;
+  const traceUnknown = filteredVisibleRows(
+    data?.traces?.unknown,
+    traceDismissKeys,
+  ).length;
   return {
     ...counts,
     passingPrs: filteredVisibleRows(data?.pullRequests?.pass).length,
     noCiPrs: filteredVisibleRows(data?.pullRequests?.noCi).length,
     failingPrs: filteredVisibleRows(
       [...(data?.pullRequests?.fail || []), ...(data?.actions?.failed || [])],
-      (row) => (row.kind === "workflowRun" ? actionKey(row) : prKey(row))
+      (row) => (row.kind === "workflowRun" ? actionKey(row) : prKey(row)),
     ).length,
     conflictPrs: filteredVisibleRows(data?.pullRequests?.conflicts).length,
     runningPrs: filteredVisibleRows(
-      [...(data?.pullRequests?.running || []), ...(data?.actions?.running || [])],
-      (row) => (row.kind === "workflowRun" ? actionKey(row) : prKey(row))
+      [
+        ...(data?.pullRequests?.running || []),
+        ...(data?.actions?.running || []),
+      ],
+      (row) => (row.kind === "workflowRun" ? actionKey(row) : prKey(row)),
     ).length,
     runningCd: filteredVisibleRows(data?.cd?.running).length,
     finishedCd: filteredVisibleRows(data?.cd?.finished).length,
@@ -1628,7 +1846,7 @@ function displayCounts(data) {
     flaggedJourneys: traceFlagged,
     activeJourneys: traceActive,
     shippedJourneys: traceCompleted,
-    tracingUnknown: traceUnknown
+    tracingUnknown: traceUnknown,
   };
 }
 
@@ -1637,10 +1855,12 @@ function currentTraceCount(counts) {
   if (state.traceFilter === "completed") return counts.shippedJourneys;
   if (state.traceFilter === "unknown") return counts.tracingUnknown;
   if (state.traceFilter === "all") {
-    return Number(counts.flaggedJourneys || 0) +
+    return (
+      Number(counts.flaggedJourneys || 0) +
       Number(counts.activeJourneys || 0) +
       Number(counts.shippedJourneys || 0) +
-      Number(counts.tracingUnknown || 0);
+      Number(counts.tracingUnknown || 0)
+    );
   }
   return counts.flaggedJourneys;
 }
@@ -1655,7 +1875,10 @@ function renderMetrics(data) {
   if (finishedCdSub) {
     if (skippedCd > 0) {
       finishedCdSub.textContent = `⊘ ${skippedCd} skipped`;
-      finishedCdSub.setAttribute("aria-label", `${skippedCd} of ${data.summary.finishedCd ?? 0} finished CD runs were skipped — production was not deployed`);
+      finishedCdSub.setAttribute(
+        "aria-label",
+        `${skippedCd} of ${data.summary.finishedCd ?? 0} finished CD runs were skipped — production was not deployed`,
+      );
       finishedCdSub.hidden = false;
     } else {
       finishedCdSub.textContent = "";
@@ -1686,7 +1909,7 @@ function renderMetrics(data) {
     runners: counts.busyRunners,
     failedCd: counts.failedCd,
     pipelineTraces: currentTraceCount(counts),
-    history: data.history?.totals?.scans ?? 0
+    history: data.history?.totals?.scans ?? 0,
   };
   for (const [key, id] of Object.entries(navIds)) {
     document.querySelector(`#${id}`).textContent = navCounts[key] ?? 0;
@@ -1707,7 +1930,8 @@ function syncActiveAffordances() {
   document.querySelectorAll("button.metric").forEach((button) => {
     const isTraceMetric = Boolean(button.dataset.traceFilter);
     const isActive = isTraceMetric
-      ? button.dataset.view === state.view && button.dataset.traceFilter === state.traceFilter
+      ? button.dataset.view === state.view &&
+        button.dataset.traceFilter === state.traceFilter
       : button.dataset.view === state.view;
     button.classList.toggle("active", isActive);
   });
@@ -1722,12 +1946,14 @@ function syncFilterUI(matched, total) {
   }
 }
 
-function renderEmptyState(view, allCount) {
+function renderEmptyState(view, allCount, data) {
   const query = state.filter.trim();
   if (query && allCount > 0) {
     return `<div class="empty">No rows match "${escapeHtml(query)}". Clear the filter to show ${escapeHtml(allCount)} ${allCount === 1 ? "item" : "items"}.</div>`;
   }
-  return `<div class="empty">${escapeHtml(view.empty)}</div>`;
+  const empty =
+    typeof view.empty === "function" ? view.empty(data) : view.empty;
+  return `<div class="empty">${escapeHtml(empty)}</div>`;
 }
 
 function render() {
@@ -1756,12 +1982,17 @@ function render() {
 
   const query = state.filter.trim().toLowerCase();
   const all = view.rows(data);
-  const filtered = query ? all.filter((row) => rowText(row).includes(query)) : all;
+  const filtered = query
+    ? all.filter((row) => rowText(row).includes(query))
+    : all;
 
   let dismissedCount = 0;
   let activeDismissable = 0;
   for (const row of filtered) {
-    if (isAutoDismissed(row)) { dismissedCount += 1; continue; }
+    if (isAutoDismissed(row)) {
+      dismissedCount += 1;
+      continue;
+    }
     const keys = dismissKeys(row);
     if (!keys.length) continue;
     if (anyDismissed(keys)) dismissedCount += 1;
@@ -1774,7 +2005,7 @@ function render() {
 
   const body = rows.length
     ? rows.map((row) => renderRow(row, state.view, view)).join("")
-    : renderEmptyState(view, all.length);
+    : renderEmptyState(view, all.length, data);
   const dismissBar = renderDismissBar(dismissedCount, activeDismissable);
   els.content.innerHTML = `${state.view === "pipelineTraces" ? renderTraceFilterBar(data) : ""}${dismissBar}${body}`;
 }
@@ -1787,10 +2018,15 @@ function render() {
 function dismissKeys(row) {
   if (!row) return [];
   if (["fail", "running"].includes(state.view)) {
-    return normalizeDismissKeys(row.kind === "workflowRun" ? actionKey(row) : prKey(row));
+    return normalizeDismissKeys(
+      row.kind === "workflowRun" ? actionKey(row) : prKey(row),
+    );
   }
   if (state.view === "failedCd") return normalizeDismissKeys(actionKey(row));
-  if (state.view === "pipelineTraces" && (row.status === "flagged" || row.status === "unknown")) {
+  if (
+    state.view === "pipelineTraces" &&
+    (row.status === "flagged" || row.status === "unknown")
+  ) {
     return traceDismissKeys(row);
   }
   return [];
@@ -1828,11 +2064,17 @@ function renderDismissBar(dismissedCount, activeCount) {
 
   const actions = [];
   if (showDismissAll) {
-    actions.push(`<button type="button" class="dismiss-action" data-dismiss-all title="Dismiss all ${activeCount} items shown">Dismiss all</button>`);
+    actions.push(
+      `<button type="button" class="dismiss-action" data-dismiss-all title="Dismiss all ${activeCount} items shown">Dismiss all</button>`,
+    );
   }
   if (dismissedCount) {
-    actions.push(`<button type="button" class="dismiss-toggle" data-dismiss-toggle>${state.showDismissed ? "Hide" : "Show"}</button>`);
-    actions.push(`<button type="button" class="dismiss-action" data-restore-all title="Restore all ${dismissedCount} dismissed ${dismissedCount === 1 ? "item" : "items"}">Restore all</button>`);
+    actions.push(
+      `<button type="button" class="dismiss-toggle" data-dismiss-toggle>${state.showDismissed ? "Hide" : "Show"}</button>`,
+    );
+    actions.push(
+      `<button type="button" class="dismiss-action" data-restore-all title="Restore all ${dismissedCount} dismissed ${dismissedCount === 1 ? "item" : "items"}">Restore all</button>`,
+    );
   }
 
   return `
@@ -1853,19 +2095,24 @@ function renderTraceFilterBar(data) {
     flagged: display.flaggedJourneys || 0,
     active: display.activeJourneys || 0,
     completed: display.shippedJourneys || 0,
-    unknown: display.tracingUnknown || 0
+    unknown: display.tracingUnknown || 0,
   };
-  const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+  const total = Object.values(counts).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0,
+  );
   const options = [
     ["flagged", "Flagged", counts.flagged],
     ["active", "In flight", counts.active],
     ["completed", "Shipped", counts.completed],
     ["unknown", "Unknown", counts.unknown],
-    ["all", "All", total]
+    ["all", "All", total],
   ];
   return `
     <div class="trace-filterbar" role="group" aria-label="Pipeline trace status filter">
-      ${options.map(([key, label, count]) => `
+      ${options
+        .map(
+          ([key, label, count]) => `
         <button
           class="trace-filter ${state.traceFilter === key ? "active" : ""}"
           type="button"
@@ -1875,19 +2122,25 @@ function renderTraceFilterBar(data) {
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(count)}</strong>
         </button>
-      `).join("")}
+      `,
+        )
+        .join("")}
     </div>
   `;
 }
 
 function renderRow(row, viewKey, view) {
   if (viewKey === "history") return renderHistoryRow(row);
-  if (viewKey === "fail" && row.kind === "workflowRun") return renderWorkflowRunRow(row, view);
-  if (viewKey === "running" && row.kind === "workflowRun") return renderWorkflowRunRow(row, view);
-  if (["pass", "noCi", "fail", "running", "conflicts"].includes(viewKey)) return renderPrRow(row, view);
+  if (viewKey === "fail" && row.kind === "workflowRun")
+    return renderWorkflowRunRow(row, view);
+  if (viewKey === "running" && row.kind === "workflowRun")
+    return renderWorkflowRunRow(row, view);
+  if (["pass", "noCi", "fail", "running", "conflicts"].includes(viewKey))
+    return renderPrRow(row, view);
   if (viewKey === "pipelineTraces") return renderTraceRow(row);
   if (viewKey === "finishedCd") return renderFinishedCdRow(row, view);
-  if (["runningCd", "finishedCd", "failedCd"].includes(viewKey)) return renderCdRow(row, view, viewKey);
+  if (["runningCd", "finishedCd", "failedCd"].includes(viewKey))
+    return renderCdRow(row, view, viewKey);
   if (viewKey === "deployments") return renderDeploymentRow(row, view);
   return renderRunnerRow(row, view);
 }
@@ -1895,7 +2148,10 @@ function renderRow(row, viewKey, view) {
 function renderHistoryRow(entry) {
   const ts = entry.ts ? formatDateTime(entry.ts) : "—";
   const mode = escapeHtml(entry.mode || "all");
-  const owners = Array.isArray(entry.owners) && entry.owners.length ? escapeHtml(entry.owners.join(", ")) : "all";
+  const owners =
+    Array.isArray(entry.owners) && entry.owners.length
+      ? escapeHtml(entry.owners.join(", "))
+      : "all";
   const repos = Number(entry.repos || 0);
   const passing = Number(entry.passingPrs || 0);
   const failing = Number(entry.failingPrs || 0);
@@ -1904,7 +2160,13 @@ function renderHistoryRow(entry) {
   const finishedCd = Number(entry.finishedCd || 0);
   const failedCd = Number(entry.failedCd || 0);
   const busyRunners = Number(entry.busyRunners || 0);
-  const maxWork = Math.max(repos, passing + failing + running, runningCd + finishedCd + failedCd, busyRunners, 1);
+  const maxWork = Math.max(
+    repos,
+    passing + failing + running,
+    runningCd + finishedCd + failedCd,
+    busyRunners,
+    1,
+  );
   const bar = (value, color) => {
     const width = Math.max(2, Math.round((value / maxWork) * 100));
     return `<span class="history-bar" style="--bar-width:${width}%;--bar-color:var(--${color})" title="${value}">${value}</span>`;
@@ -1950,7 +2212,8 @@ function mergeBlockReason(row) {
   if (row.state !== "pass") return "CI is not passing";
   if (row.isDraft) return "Draft pull requests cannot be merged";
   if (row.hasConflict) return "Resolve merge conflicts first";
-  if (row.checkCount === 0 && row.mergeable !== "MERGEABLE") return "Pull request is not currently mergeable";
+  if (row.checkCount === 0 && row.mergeable !== "MERGEABLE")
+    return "Pull request is not currently mergeable";
   return "";
 }
 
@@ -1961,21 +2224,34 @@ function renderPrActions(row, dismissButton = "") {
   const isMerged = state.merged.has(key);
   const isClosing = state.closing.has(key);
   const isClosed = state.closed.has(key);
-  const isAutoMerge = !reason && !isMerging && !isMerged && state.autoMerges.has(key);
+  const isAutoMerge =
+    !reason && !isMerging && !isMerged && state.autoMerges.has(key);
   const isAutoMergePending = isAutoMerge && autoMergeRemainingSeconds(key) <= 0;
-  const buttonLabel = isMerged ? "Merged" : isMerging ? "Merging" : isAutoMerge ? autoMergeButtonLabel(key) : "Merge";
+  const buttonLabel = isMerged
+    ? "Merged"
+    : isMerging
+      ? "Merging"
+      : isAutoMerge
+        ? autoMergeButtonLabel(key)
+        : "Merge";
   const buttonTitle = isMerged
     ? "Pull request merged"
     : isMerging
-    ? "Merging pull request..."
-    : reason || (isAutoMerge ? "Automatically merge when the timer reaches zero" : "Merge this pull request");
+      ? "Merging pull request..."
+      : reason ||
+        (isAutoMerge
+          ? "Automatically merge when the timer reaches zero"
+          : "Merge this pull request");
   const closeLabel = isClosed ? "Closed" : isClosing ? "Closing" : "Close";
   const closeTitle = isClosed
     ? "Pull request closed"
     : isClosing
-    ? "Closing pull request..."
-    : "Close this pull request";
-  const showMergeButton = row.state === "pass" && !isClosed && !(row.checkCount === 0 && row.mergeable !== "MERGEABLE");
+      ? "Closing pull request..."
+      : "Close this pull request";
+  const showMergeButton =
+    row.state === "pass" &&
+    !isClosed &&
+    !(row.checkCount === 0 && row.mergeable !== "MERGEABLE");
   const mergeButton = showMergeButton
     ? `<button
          class="merge-button"
@@ -2018,13 +2294,14 @@ function renderPrActions(row, dismissButton = "") {
 }
 
 function renderPrRow(row, view) {
-  const detail = row.state === "fail"
-    ? `Reason: ${failureDetail(row, "CI failed")}`
-    : row.runningChecks?.length
-    ? row.runningChecks.join(", ")
-    : row.checkCount
-    ? `${row.checkCount} checks complete`
-    : "no checks reported";
+  const detail =
+    row.state === "fail"
+      ? `Reason: ${failureDetail(row, "CI failed")}`
+      : row.runningChecks?.length
+        ? row.runningChecks.join(", ")
+        : row.checkCount
+          ? `${row.checkCount} checks complete`
+          : "no checks reported";
   const stateLabel = row.checkCount ? row.state.toUpperCase() : "NO CI";
   const conflictBadge = row.hasConflict
     ? `<span class="conflict-pill" title="Branch has merge conflicts that block this PR">
@@ -2040,7 +2317,12 @@ function renderPrRow(row, view) {
   const phaseBadge = renderPhaseBadge(row);
   const keys = dismissKeys(row);
   const dismissed = anyDismissed(keys);
-  const dismissButton = keys.length ? renderDismissButton(keys, `${row.repo} ${row.numberLabel || `#${row.number}`}`) : "";
+  const dismissButton = keys.length
+    ? renderDismissButton(
+        keys,
+        `${row.repo} ${row.numberLabel || `#${row.number}`}`,
+      )
+    : "";
   return `
     <article class="row${dismissed ? " row-dismissed" : ""}${row.hasConflict ? " row-conflict" : ""}${row.phaseStale ? " row-stale" : ""}" data-href="${escapeHtml(row.url || "")}" style="--accent: var(--${view.color}); --soft: var(--${view.color}-soft);">
       <div class="row-main">
@@ -2071,15 +2353,23 @@ function renderPhaseBadge(row) {
 
 function renderCdRow(row, view, viewKey) {
   const status = viewKey === "runningCd" ? row.status : row.conclusion;
-  const timeDetail = [row.branch, formatTime(row.createdAt)].filter(Boolean).join(" · ");
-  const detail = viewKey === "failedCd" || row.failureReason
-    ? [`Reason: ${failureDetail(row, "CD failed")}`, timeDetail].filter(Boolean).join(" · ")
-    : timeDetail;
-  const tagClass = viewKey === "failedCd" ? `tag tag-${statusClass(status)}` : "tag";
+  const timeDetail = [row.branch, formatTime(row.createdAt)]
+    .filter(Boolean)
+    .join(" · ");
+  const detail =
+    viewKey === "failedCd" || row.failureReason
+      ? [`Reason: ${failureDetail(row, "CD failed")}`, timeDetail]
+          .filter(Boolean)
+          .join(" · ")
+      : timeDetail;
+  const tagClass =
+    viewKey === "failedCd" ? `tag tag-${statusClass(status)}` : "tag";
   const phaseBadge = renderPhaseBadge(row);
   const keys = viewKey === "failedCd" ? dismissKeys(row) : [];
   const dismissed = anyDismissed(keys);
-  const dismissButton = keys.length ? renderDismissButton(keys, `${row.workflow} ${row.runNumber}`) : "";
+  const dismissButton = keys.length
+    ? renderDismissButton(keys, `${row.workflow} ${row.runNumber}`)
+    : "";
   return `
     <article class="row${dismissed ? " row-dismissed" : ""}${row.phaseStale ? " row-stale" : ""}" data-href="${escapeHtml(row.url || "")}" style="--accent: var(--${view.color}); --soft: var(--${view.color}-soft);">
       <div class="row-main">
@@ -2106,15 +2396,19 @@ function traceTone(row) {
 }
 
 function traceStatusLabel(status) {
-  return {
-    complete: "Done",
-    active: "Active",
-    blocked: "Blocked",
-    missing: "Missing",
-    pending: "Pending",
-    skipped: "Skipped",
-    unknown: "Unknown"
-  }[status] || status || "Pending";
+  return (
+    {
+      complete: "Done",
+      active: "Active",
+      blocked: "Blocked",
+      missing: "Missing",
+      pending: "Pending",
+      skipped: "Skipped",
+      unknown: "Unknown",
+    }[status] ||
+    status ||
+    "Pending"
+  );
 }
 
 function traceStageLabel(stage) {
@@ -2130,28 +2424,37 @@ function traceStageLabel(stage) {
 function renderTraceStages(stages = []) {
   return `
     <ol class="trace-stages" aria-label="Pipeline stages">
-      ${stages.map((stage) => `
+      ${stages
+        .map(
+          (stage) => `
         <li class="trace-stage trace-stage-${escapeHtml(stage.status || "pending")}">
           <span class="trace-stage-dot" aria-hidden="true"></span>
           <span class="trace-stage-label">${escapeHtml(traceStageLabel(stage))}</span>
           <strong>${escapeHtml(traceStatusLabel(stage.status))}</strong>
         </li>
-      `).join("")}
+      `,
+        )
+        .join("")}
     </ol>
   `;
 }
 
 function renderTraceEvidence(trace) {
-  const items = (trace.evidence || []).filter((item) => item?.label).slice(0, 4);
+  const items = (trace.evidence || [])
+    .filter((item) => item?.label)
+    .slice(0, 4);
   if (!items.length) return "";
   return `
     <details class="trace-evidence">
       <summary>Evidence</summary>
       <div class="trace-evidence-list">
-        ${items.map((item) => item.url
-          ? `<a class="source-link" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.label)}</a>`
-          : `<span class="file-status">${escapeHtml(item.label)}</span>`
-        ).join("")}
+        ${items
+          .map((item) =>
+            item.url
+              ? `<a class="source-link" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.label)}</a>`
+              : `<span class="file-status">${escapeHtml(item.label)}</span>`,
+          )
+          .join("")}
       </div>
     </details>
   `;
@@ -2159,17 +2462,28 @@ function renderTraceEvidence(trace) {
 
 function renderTraceRow(row) {
   const tone = traceTone(row);
-  const status = row.status === "completed" ? "shipped" : row.status === "active" ? "in flight" : row.status;
+  const status =
+    row.status === "completed"
+      ? "shipped"
+      : row.status === "active"
+        ? "in flight"
+        : row.status;
   const action = row.nextAction?.url
     ? `<a class="open-link" href="${escapeHtml(row.nextAction.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.nextAction.label || "Open")}</a>`
     : `<span class="trace-action-muted">${escapeHtml(row.nextAction?.label || "No action link")}</span>`;
-  const timeDetail = [row.baseRef ? `base ${row.baseRef}` : "", row.lastEvidenceAt ? `last ${formatRelative(row.lastEvidenceAt)}` : ""]
+  const timeDetail = [
+    row.baseRef ? `base ${row.baseRef}` : "",
+    row.lastEvidenceAt ? `last ${formatRelative(row.lastEvidenceAt)}` : "",
+  ]
     .filter(Boolean)
     .join(" · ");
   const keys = dismissKeys(row);
   const dismissed = anyDismissed(keys);
   const dismissButton = keys.length
-    ? renderDismissButton(keys, `${row.repo} ${row.numberLabel || `#${row.prNumber}`}`)
+    ? renderDismissButton(
+        keys,
+        `${row.repo} ${row.numberLabel || `#${row.prNumber}`}`,
+      )
     : "";
   return `
     <article class="trace-card trace-${escapeHtml(row.status || "active")}${dismissed ? " row-dismissed" : ""}" style="--accent: var(--${tone}); --soft: var(--${tone}-soft);" aria-label="${escapeHtml(row.repo)} ${escapeHtml(row.numberLabel || `#${row.prNumber}`)} pipeline trace">
@@ -2193,7 +2507,11 @@ function renderTraceRow(row) {
 }
 
 function statusClass(status) {
-  return String(status || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "unknown";
+  return (
+    String(status || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-") || "unknown"
+  );
 }
 
 function formatSignedCount(value, prefix) {
@@ -2211,15 +2529,18 @@ function renderChangedPages(summary) {
       </li>
     `;
   }
-  return pages.map((page) => {
-    const label = page.environment ? `${page.label} · ${page.environment}` : page.label;
-    const pageLink = page.url
-      ? `<a class="page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
-      : `<span class="page-link page-link-muted">${escapeHtml(label)}</span>`;
-    const source = page.sourceUrl
-      ? `<a class="source-link" href="${escapeHtml(page.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(page.sourcePath)}</a>`
-      : `<span>${escapeHtml(page.sourcePath)}</span>`;
-    return `
+  return pages
+    .map((page) => {
+      const label = page.environment
+        ? `${page.label} · ${page.environment}`
+        : page.label;
+      const pageLink = page.url
+        ? `<a class="page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+        : `<span class="page-link page-link-muted">${escapeHtml(label)}</span>`;
+      const source = page.sourceUrl
+        ? `<a class="source-link" href="${escapeHtml(page.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(page.sourcePath)}</a>`
+        : `<span>${escapeHtml(page.sourcePath)}</span>`;
+      return `
       <li>
         <div class="review-link-row">
           ${pageLink}
@@ -2228,7 +2549,8 @@ function renderChangedPages(summary) {
         <p>${escapeHtml(page.lookFor || "Check the changed page in the deployed app.")}</p>
       </li>
     `;
-  }).join("");
+    })
+    .join("");
 }
 
 function renderChangedFiles(summary) {
@@ -2236,12 +2558,18 @@ function renderChangedFiles(summary) {
   if (!files.length) {
     return `<li class="review-empty">No deployment diff was available for this run. Use the recent merged PR summary below.</li>`;
   }
-  const rows = files.map((file) => {
-    const delta = [formatSignedCount(file.additions, "+"), formatSignedCount(file.deletions, "-")].filter(Boolean).join(" ");
-    const fileLabel = file.url
-      ? `<a class="source-link" href="${escapeHtml(file.url)}" target="_blank" rel="noreferrer">${escapeHtml(file.path)}</a>`
-      : `<span>${escapeHtml(file.path)}</span>`;
-    return `
+  const rows = files
+    .map((file) => {
+      const delta = [
+        formatSignedCount(file.additions, "+"),
+        formatSignedCount(file.deletions, "-"),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const fileLabel = file.url
+        ? `<a class="source-link" href="${escapeHtml(file.url)}" target="_blank" rel="noreferrer">${escapeHtml(file.path)}</a>`
+        : `<span>${escapeHtml(file.path)}</span>`;
+      return `
       <li>
         <div class="file-change-line">
           ${fileLabel}
@@ -2250,7 +2578,8 @@ function renderChangedFiles(summary) {
         <p>${escapeHtml(file.lookFor || "Check the affected behavior.")}</p>
       </li>
     `;
-  }).join("");
+    })
+    .join("");
   const hidden = summary.hiddenFileCount
     ? `<p class="review-more">${escapeHtml(summary.hiddenFileCount)} more changed files are available in the commit link.</p>`
     : "";
@@ -2262,7 +2591,9 @@ function renderPrPageLinks(pr) {
   pages = pages.filter((page) => !page.url || !isBackendUrl(page.url));
   if (!pages.length) {
     if (!pr.productionUrl || isBackendUrl(pr.productionUrl)) return "";
-    const label = pr.productionEnvironment ? `Production site · ${pr.productionEnvironment}` : "Production site";
+    const label = pr.productionEnvironment
+      ? `Production site · ${pr.productionEnvironment}`
+      : "Production site";
     return `
       <div class="pr-page-links">
         <a class="page-link page-link-quiet visual-page-link" href="${escapeHtml(pr.productionUrl)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>
@@ -2271,12 +2602,17 @@ function renderPrPageLinks(pr) {
   }
   return `
     <div class="pr-page-links">
-      ${pages.slice(0, 3).map((page) => {
-        const label = page.environment ? `${page.label} · ${page.environment}` : page.label;
-        return page.url
-          ? `<a class="page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
-          : `<span class="page-link page-link-muted">${escapeHtml(label)}</span>`;
-      }).join("")}
+      ${pages
+        .slice(0, 3)
+        .map((page) => {
+          const label = page.environment
+            ? `${page.label} · ${page.environment}`
+            : page.label;
+          return page.url
+            ? `<a class="page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+            : `<span class="page-link page-link-muted">${escapeHtml(label)}</span>`;
+        })
+        .join("")}
       ${pages.length > 3 ? `<span class="page-link page-link-muted">+${escapeHtml(pages.length - 3)} more</span>` : ""}
     </div>
   `;
@@ -2289,9 +2625,14 @@ function renderPrFileLinks(pr) {
     <details class="source-details">
       <summary>Files changed (${escapeHtml(pr.filesChanged || files.length)})</summary>
       <div class="pr-file-links">
-      ${files.slice(0, 4).map((file) => `
+      ${files
+        .slice(0, 4)
+        .map(
+          (file) => `
         <a class="source-link" href="${escapeHtml(file.url || pr.url)}" target="_blank" rel="noreferrer">${escapeHtml(file.path)}</a>
-      `).join("")}
+      `,
+        )
+        .join("")}
       ${pr.hiddenFileCount ? `<span class="file-status">+${escapeHtml(pr.hiddenFileCount)} more</span>` : ""}
       </div>
     </details>
@@ -2302,25 +2643,33 @@ function uniqueVisualPages(summary) {
   const seen = new Set();
   const groups = [
     ...(summary?.changedPages || []),
-    ...(summary?.mergedPullRequests || []).flatMap((item) => item.changedPages || []),
-    ...(summary?.recentCommits || []).flatMap((item) => item.changedPages || [])
+    ...(summary?.mergedPullRequests || []).flatMap(
+      (item) => item.changedPages || [],
+    ),
+    ...(summary?.recentCommits || []).flatMap(
+      (item) => item.changedPages || [],
+    ),
   ];
-  return groups.filter((page) => {
-    if (page.url && isBackendUrl(page.url)) return false;
-    const key = page.url || page.path || page.label;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).concat(
-    !seen.size && summary?.deployUrl && !isBackendUrl(summary.deployUrl)
-      ? [{
-          label: "Production site",
-          path: "/",
-          url: summary.deployUrl,
-          environment: summary.environment || "production"
-        }]
-      : []
-  );
+  return groups
+    .filter((page) => {
+      if (page.url && isBackendUrl(page.url)) return false;
+      const key = page.url || page.path || page.label;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .concat(
+      !seen.size && summary?.deployUrl && !isBackendUrl(summary.deployUrl)
+        ? [
+            {
+              label: "Production site",
+              path: "/",
+              url: summary.deployUrl,
+              environment: summary.environment || "production",
+            },
+          ]
+        : [],
+    );
 }
 
 function renderVisualReviewLinks(summary) {
@@ -2333,12 +2682,17 @@ function renderVisualReviewLinks(summary) {
         <span>${escapeHtml(pages.length)} ${pages.length === 1 ? "page" : "pages"}</span>
       </div>
       <div class="visual-link-grid">
-        ${pages.slice(0, 12).map((page) => {
-          const label = page.environment ? `${page.label} · ${page.environment}` : page.label;
-          return page.url
-            ? `<a class="page-link visual-page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
-            : `<span class="page-link page-link-muted visual-page-link">${escapeHtml(label)}</span>`;
-        }).join("")}
+        ${pages
+          .slice(0, 12)
+          .map((page) => {
+            const label = page.environment
+              ? `${page.label} · ${page.environment}`
+              : page.label;
+            return page.url
+              ? `<a class="page-link visual-page-link" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+              : `<span class="page-link page-link-muted visual-page-link">${escapeHtml(label)}</span>`;
+          })
+          .join("")}
       </div>
     </section>
   `;
@@ -2349,7 +2703,9 @@ function renderMergedPrSummary(summary) {
   if (!prs.length) {
     return `<li class="review-empty">No recent merged PRs were available from GitHub for this repository.</li>`;
   }
-  return prs.map((pr) => `
+  return prs
+    .map(
+      (pr) => `
     <li class="summary-item">
       <div class="summary-item-primary">
         <div class="merged-pr-head">
@@ -2366,7 +2722,9 @@ function renderMergedPrSummary(summary) {
         ${renderPrFileLinks(pr)}
       </details>
     </li>
-  `).join("");
+  `,
+    )
+    .join("");
 }
 
 function renderRecentCommitSummary(summary) {
@@ -2374,7 +2732,9 @@ function renderRecentCommitSummary(summary) {
   if (!commits.length) {
     return `<li class="review-empty">No recent commit metadata was available from GitHub for this repository.</li>`;
   }
-  return commits.map((commit) => `
+  return commits
+    .map(
+      (commit) => `
     <li class="summary-item">
       <div class="summary-item-primary">
         <div class="merged-pr-head">
@@ -2391,7 +2751,9 @@ function renderRecentCommitSummary(summary) {
         ${renderPrFileLinks(commit)}
       </details>
     </li>
-  `).join("");
+  `,
+    )
+    .join("");
 }
 
 function renderReviewLinks(summary) {
@@ -2399,14 +2761,18 @@ function renderReviewLinks(summary) {
   const items = [
     ["Merged PR search", links.mergedPullRequestsUrl],
     ["Commit history", links.commitsUrl],
-    ["Compare manually", links.compareHelpUrl]
+    ["Compare manually", links.compareHelpUrl],
   ].filter(([, href]) => href);
   if (!items.length) return "";
   return `
     <div class="fallback-links" aria-label="Manual GitHub review links">
-      ${items.map(([label, href]) => `
+      ${items
+        .map(
+          ([label, href]) => `
         <a class="open-link fallback-link" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>
-      `).join("")}
+      `,
+        )
+        .join("")}
     </div>
   `;
 }
@@ -2448,42 +2814,76 @@ function renderFinishedCdRow(row, view) {
   const status = row.conclusion || "completed";
   const statusTone = isSkipped
     ? "warning"
-    : row.failureReason ? "danger" : statusClass(status);
-  const timeDetail = [row.branch, formatTime(row.createdAt)].filter(Boolean).join(" · ");
-  const fileCount = hasChangedFiles || Number(summary.filesChanged || 0) > 0
-    ? `${summary.filesChanged} files`
-    : hasMergedPrs
-    ? `${summary.mergedPullRequests.length} merged PRs`
-    : hasRecentCommits
-    ? `${summary.recentCommits.length} commits`
-    : "manual review links";
-  const delta = [formatSignedCount(summary.additions, "+"), formatSignedCount(summary.deletions, "-")].filter(Boolean).join(" ");
-  const changeLinkLabel = summary.sourceLabel || summary.shortSha || "change unavailable";
+    : row.failureReason
+      ? "danger"
+      : statusClass(status);
+  const timeDetail = [row.branch, formatTime(row.createdAt)]
+    .filter(Boolean)
+    .join(" · ");
+  const fileCount =
+    hasChangedFiles || Number(summary.filesChanged || 0) > 0
+      ? `${summary.filesChanged} files`
+      : hasMergedPrs
+        ? `${summary.mergedPullRequests.length} merged PRs`
+        : hasRecentCommits
+          ? `${summary.recentCommits.length} commits`
+          : "manual review links";
+  const delta = [
+    formatSignedCount(summary.additions, "+"),
+    formatSignedCount(summary.deletions, "-"),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const changeLinkLabel =
+    summary.sourceLabel || summary.shortSha || "change unavailable";
   const commitLink = summary.commitUrl
     ? `<a class="source-link" href="${escapeHtml(summary.commitUrl)}" target="_blank" rel="noreferrer">${escapeHtml(changeLinkLabel)}</a>`
     : `<span>${escapeHtml(changeLinkLabel)}</span>`;
   const changeSourceLabel = summary.source === "compare" ? "Diff" : "Commit";
   const commitCount = Number(summary.commitCount || 0);
   const pageSection = hasChangedPages
-    ? renderReviewSection("Changed route sources", "Changed route sources", "page-review-list", renderChangedPages(summary))
+    ? renderReviewSection(
+        "Changed route sources",
+        "Changed route sources",
+        "page-review-list",
+        renderChangedPages(summary),
+      )
     : "";
   const fileSection = hasChangedFiles
-    ? renderReviewSection("Source details", "Changed files and review cues", "file-review-list", renderChangedFiles(summary))
+    ? renderReviewSection(
+        "Source details",
+        "Changed files and review cues",
+        "file-review-list",
+        renderChangedFiles(summary),
+      )
     : "";
-  const mergedPrSection = hasMergedPrs ? renderReviewSection(
-    "Recent merged PR summary",
-    "Recent merged pull requests",
-    "merged-pr-list",
-    renderMergedPrSummary(summary),
-    { collapsible: true, meta: `${summary.mergedPullRequests.length} PRs`, open: false }
-  ) : "";
-  const commitSection = !hasMergedPrs && hasRecentCommits ? renderReviewSection(
-    "Recent commit summary",
-    "Recent commits",
-    "merged-pr-list",
-    renderRecentCommitSummary(summary),
-    { collapsible: true, meta: `${summary.recentCommits.length} commits`, open: false }
-  ) : "";
+  const mergedPrSection = hasMergedPrs
+    ? renderReviewSection(
+        "Recent merged PR summary",
+        "Recent merged pull requests",
+        "merged-pr-list",
+        renderMergedPrSummary(summary),
+        {
+          collapsible: true,
+          meta: `${summary.mergedPullRequests.length} PRs`,
+          open: false,
+        },
+      )
+    : "";
+  const commitSection =
+    !hasMergedPrs && hasRecentCommits
+      ? renderReviewSection(
+          "Recent commit summary",
+          "Recent commits",
+          "merged-pr-list",
+          renderRecentCommitSummary(summary),
+          {
+            collapsible: true,
+            meta: `${summary.recentCommits.length} commits`,
+            open: false,
+          },
+        )
+      : "";
   const tagLabel = isSkipped
     ? `<span aria-hidden="true">⊘</span> ${escapeHtml(status)}`
     : escapeHtml(status);
@@ -2541,16 +2941,22 @@ function renderFinishedCdRow(row, view) {
 
 function renderWorkflowRunRow(row, view) {
   const status = row.conclusion || row.status || "running";
-  const timeDetail = [row.branch, formatTime(row.createdAt)].filter(Boolean).join(" · ");
+  const timeDetail = [row.branch, formatTime(row.createdAt)]
+    .filter(Boolean)
+    .join(" · ");
   const detail = row.conclusion
-    ? [`Reason: ${failureDetail(row, "CI failed")}`, timeDetail].filter(Boolean).join(" · ")
+    ? [`Reason: ${failureDetail(row, "CI failed")}`, timeDetail]
+        .filter(Boolean)
+        .join(" · ")
     : timeDetail;
   const keys = dismissKeys(row);
   const auto = isAutoDismissed(row);
   const dismissed = auto || anyDismissed(keys);
   const dismissButton = auto
     ? `<span class="row-dismiss row-dismiss-auto" title="${escapeHtml(row.autoDismissReason || "Dismissed automatically")}">Auto-dismissed</span>`
-    : keys.length ? renderDismissButton(keys, `${row.workflow} ${row.runNumber}`) : "";
+    : keys.length
+      ? renderDismissButton(keys, `${row.workflow} ${row.runNumber}`)
+      : "";
   const phaseBadge = renderPhaseBadge(row);
   return `
     <article class="row${dismissed ? " row-dismissed" : ""}${row.phaseStale ? " row-stale" : ""}" data-href="${escapeHtml(row.url || "")}" style="--accent: var(--${view.color}); --soft: var(--${view.color}-soft);">
@@ -2655,7 +3061,9 @@ function renderInbox() {
   }
   els.inboxToggle.setAttribute(
     "aria-label",
-    unread > 0 ? `Open notification inbox (${unread} unread)` : "Open notification inbox"
+    unread > 0
+      ? `Open notification inbox (${unread} unread)`
+      : "Open notification inbox",
   );
 
   if (total === 0) {
@@ -2688,7 +3096,7 @@ function renderInbox() {
           </span>
           <span class="inbox-time" title="${escapeHtml(formatTime(item.at))}">${escapeHtml(relativeTime(item.at))}</span>
         </a>
-      `
+      `,
     )
     .join("");
 }
@@ -2760,16 +3168,23 @@ function setMode(mode) {
 }
 
 function syncAccountOptions(accounts) {
-  const cleaned = [...new Set(accounts.filter((value) => typeof value === "string" && value.trim()))];
-  const sameAccounts = cleaned.length === state.accounts.length
-    && cleaned.every((value, index) => value === state.accounts[index]);
+  const cleaned = [
+    ...new Set(
+      accounts.filter((value) => typeof value === "string" && value.trim()),
+    ),
+  ];
+  const sameAccounts =
+    cleaned.length === state.accounts.length &&
+    cleaned.every((value, index) => value === state.accounts[index]);
   if (sameAccounts) {
     renderOwnerPicker();
     return;
   }
   state.accounts = cleaned;
   const allowed = new Set(cleaned.map((value) => value.toLowerCase()));
-  const trimmedOwners = state.owners.filter((value) => allowed.has(value.toLowerCase()));
+  const trimmedOwners = state.owners.filter((value) =>
+    allowed.has(value.toLowerCase()),
+  );
   if (trimmedOwners.length !== state.owners.length) {
     state.owners = trimmedOwners;
     persist();
@@ -2779,7 +3194,8 @@ function syncAccountOptions(accounts) {
 
 function ownerPickerSummary() {
   if (!state.owners.length) return "All";
-  if (state.accounts.length && state.owners.length === state.accounts.length) return "All";
+  if (state.accounts.length && state.owners.length === state.accounts.length)
+    return "All";
   if (state.owners.length === 1) return state.owners[0];
   return state.accounts.length
     ? `${state.owners.length} of ${state.accounts.length}`
@@ -2794,8 +3210,9 @@ function renderOwnerPicker() {
   }
   els.ownerPicker.hidden = false;
   els.ownerPickerSummary.textContent = ownerPickerSummary();
-  const isAll = !state.owners.length
-    || (state.accounts.length && state.owners.length === state.accounts.length);
+  const isAll =
+    !state.owners.length ||
+    (state.accounts.length && state.owners.length === state.accounts.length);
   els.ownerPickerSummary.classList.toggle("is-all", isAll);
   els.ownerPickerToggle.title = isAll
     ? "Limit dashboard scope to specific accounts"
@@ -2810,7 +3227,8 @@ function renderOwnerPicker() {
   }
   els.ownerPickerList.innerHTML = accountSource
     .map((account) => {
-      const checked = selected.size === 0 || selected.has(account.toLowerCase());
+      const checked =
+        selected.size === 0 || selected.has(account.toLowerCase());
       return `<label class="owner-picker-option" role="listitem">
           <input type="checkbox" data-account="${escapeHtml(account)}" ${checked ? "checked" : ""} />
           <span>${escapeHtml(account)}</span>
@@ -2825,7 +3243,8 @@ function commitOwnerSelectionFromPanel() {
   inputs.forEach((input) => {
     if (input.checked) checked.push(input.dataset.account);
   });
-  const isAll = checked.length === 0 || checked.length === state.accounts.length;
+  const isAll =
+    checked.length === 0 || checked.length === state.accounts.length;
   const nextOwners = isAll ? [] : checked;
   const before = state.owners.join(",").toLowerCase();
   const after = nextOwners.join(",").toLowerCase();
@@ -2870,7 +3289,7 @@ async function mergePullRequest(button) {
     const response = await fetch("/api/pull-request/merge", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repo, number })
+      body: JSON.stringify({ repo, number }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2885,11 +3304,13 @@ async function mergePullRequest(button) {
     const branchStatus = data.branchDelete?.deleted
       ? "Branch deleted."
       : data.branchDelete?.error
-      ? `Branch delete failed: ${data.branchDelete.error}`
-      : "Branch delete was skipped.";
+        ? `Branch delete failed: ${data.branchDelete.error}`
+        : "Branch delete was skipped.";
     showToast(
-      data.branchDelete?.deleted ? "PR merged" : "PR merged, branch not deleted",
-      `${data.pr?.repo || repo} ${data.pr?.numberLabel || `#${number}`}: ${data.pr?.title || title}. ${branchStatus}`
+      data.branchDelete?.deleted
+        ? "PR merged"
+        : "PR merged, branch not deleted",
+      `${data.pr?.repo || repo} ${data.pr?.numberLabel || `#${number}`}: ${data.pr?.title || title}. ${branchStatus}`,
     );
     await refreshAfterMutation("merge");
   } catch (error) {
@@ -2907,7 +3328,13 @@ async function closePullRequest(button) {
   const key = mergeKey(repo, number);
   const title = button.dataset.title || `#${number}`;
   if (!repo || !Number.isInteger(number)) return;
-  if (state.closing.has(key) || state.closed.has(key) || state.merging.has(key) || state.merged.has(key)) return;
+  if (
+    state.closing.has(key) ||
+    state.closed.has(key) ||
+    state.merging.has(key) ||
+    state.merged.has(key)
+  )
+    return;
 
   clearAutoMerge(key);
   state.closing.add(key);
@@ -2918,7 +3345,7 @@ async function closePullRequest(button) {
     const response = await fetch("/api/pull-request/close", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repo, number })
+      body: JSON.stringify({ repo, number }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -2932,7 +3359,7 @@ async function closePullRequest(button) {
     render();
     showToast(
       "PR closed",
-      `${data.pr?.repo || repo} ${data.pr?.numberLabel || `#${number}`}: ${data.pr?.title || title}.`
+      `${data.pr?.repo || repo} ${data.pr?.numberLabel || `#${number}`}: ${data.pr?.title || title}.`,
     );
     await refreshAfterMutation("close");
   } catch (error) {
@@ -2956,7 +3383,9 @@ if (els.ownerPickerToggle) {
   });
 }
 if (els.ownerPickerPanel) {
-  els.ownerPickerPanel.addEventListener("click", (event) => event.stopPropagation());
+  els.ownerPickerPanel.addEventListener("click", (event) =>
+    event.stopPropagation(),
+  );
 }
 if (els.ownerPickerAll) {
   els.ownerPickerAll.addEventListener("click", () => {
@@ -3045,13 +3474,23 @@ els.notifications.addEventListener("change", async () => {
       state.notifications = false;
       persist();
       syncNotificationControl();
-      showToast("Notifications blocked", "Allow notifications for this site in your browser settings.");
+      showToast(
+        "Notifications blocked",
+        "Allow notifications for this site in your browser settings.",
+      );
       return;
     }
     if (permission === "granted") {
-      sendPopup("Notifications enabled", "CI/CD completion alerts are active.", "notifications:test");
+      sendPopup(
+        "Notifications enabled",
+        "CI/CD completion alerts are active.",
+        "notifications:test",
+      );
     } else {
-      showToast("In-app alerts enabled", "Browser notification permission was not granted.");
+      showToast(
+        "In-app alerts enabled",
+        "Browser notification permission was not granted.",
+      );
     }
   }
   syncNotificationControl();
@@ -3085,7 +3524,8 @@ els.content.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const key = dismissButton.getAttribute("data-dismiss-key");
-    if (dismissButton.getAttribute("data-dismiss-action") === "restore") restoreRow(key);
+    if (dismissButton.getAttribute("data-dismiss-action") === "restore")
+      restoreRow(key);
     else dismissRow(key);
     return;
   }
@@ -3130,7 +3570,11 @@ els.content.addEventListener("click", (event) => {
 
 document.addEventListener("click", (event) => {
   if (!state.inboxOpen) return;
-  if (event.target.closest("#inboxPanel") || event.target.closest("#inboxToggle")) return;
+  if (
+    event.target.closest("#inboxPanel") ||
+    event.target.closest("#inboxToggle")
+  )
+    return;
   closeInbox();
 });
 
@@ -3161,12 +3605,21 @@ els.content.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   const target = event.target;
   const inputType = target instanceof HTMLInputElement ? target.type : "";
-  const inField = target instanceof HTMLElement && (
-    target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT" ||
-    target.isContentEditable ||
-    (target.tagName === "INPUT" && ["email", "number", "password", "search", "tel", "text", "url"].includes(inputType))
-  );
+  const inField =
+    target instanceof HTMLElement &&
+    (target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
+      target.isContentEditable ||
+      (target.tagName === "INPUT" &&
+        [
+          "email",
+          "number",
+          "password",
+          "search",
+          "tel",
+          "text",
+          "url",
+        ].includes(inputType)));
 
   if (event.key === "Escape" && target === els.filter) {
     state.filter = "";
