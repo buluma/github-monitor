@@ -1,0 +1,3816 @@
+import http from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { spawn } from "node:child_process";
+import { createSign } from "node:crypto";
+import { readFile, stat, mkdir, readdir, appendFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+try {
+  process.loadEnvFile(join(__dirname, ".env"));
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+const publicDir = join(__dirname, "public");
+const port = Number(process.env.PORT || 4177);
+const githubApiBase = "https://api.github.com";
+const githubGraphqlUrl = "https://api.github.com/graphql";
+const GITHUB_APP_ID = process.env.GITHUB_APP_ID || "";
+const GITHUB_APP_PRIVATE_KEY_PATH = process.env.GITHUB_APP_PRIVATE_KEY_PATH || "";
+const APP_AUTH_ENABLED = Boolean(GITHUB_APP_ID && GITHUB_APP_PRIVATE_KEY_PATH);
+let githubTokenPromise;
+const scanMetrics = new AsyncLocalStorage();
+const SECURITY_HEADERS = {
+  "content-security-policy": [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'none'"
+  ].join("; "),
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()"
+};
+
+const PR_SEARCH_GRAPHQL = `
+  query($q: String!, $endCursor: String) {
+    search(type: ISSUE, query: $q, first: 100, after: $endCursor) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        __typename
+        ... on PullRequest {
+          number
+          title
+          url
+          createdAt
+          updatedAt
+          isDraft
+          mergeable
+          headRefOid
+          baseRefName
+          author {
+            login
+          }
+          repository {
+            nameWithOwner
+            isArchived
+          }
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup {
+                  contexts(first: 100) {
+                    nodes {
+                      __typename
+                      ... on CheckRun {
+                        name
+                        status
+                        conclusion
+                        checkSuite {
+                          workflowRun {
+                            workflow {
+                              name
+                            }
+                          }
+                        }
+                      }
+                      ... on StatusContext {
+                        context
+                        state
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const PR_BY_NUMBER_GRAPHQL = `
+  query($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        isDraft
+        mergeable
+        headRefOid
+        baseRefName
+        headRefName
+        headRepository {
+          nameWithOwner
+        }
+        author {
+          login
+        }
+        repository {
+          nameWithOwner
+          isArchived
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      status
+                      conclusion
+                      checkSuite {
+                        workflowRun {
+                          workflow {
+                            name
+                          }
+                        }
+                      }
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const CD_WORKFLOW_PATTERN = /(^|[^A-Za-z0-9])(cd|deploy|deployment|release|publish)([^A-Za-z0-9]|$)/i;
+const FAILED_ACTION_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+const FAILED_CD_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+const FINISHED_CD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CHANGE_FILE_LINK_LIMIT = 14;
+const MERGED_PR_SUMMARY_LIMIT = 10;
+// Fetch changed files for every merged PR in the trace window, not just the few
+// shown in the summary UI: pipeline traces use the file list to tell whether a
+// merged PR actually warranted a production deploy (see mergedPrIsDeployNeutral).
+// Without files, a changelog/docs-only PR would be wrongly flagged as "no
+// matching production CD run yet". File responses are cached per PR for
+// MERGED_PR_CACHE_TTL_MS and fetched against the core (not search) rate limit.
+const MERGED_PR_FILE_DETAIL_FETCH_LIMIT = MERGED_PR_SUMMARY_LIMIT;
+const MERGED_PR_FILE_LINK_LIMIT = 6;
+const PRODUCTION_TARGET_SCAN_LIMIT = 40;
+const PRODUCTION_TARGET_MAX_FILE_BYTES = 260000;
+// Fixed, high-signal files probed (in priority order) for a deployable URL.
+// Fetched in a single batched GraphQL call rather than one REST read each.
+const PRODUCTION_TARGET_CODE_FILES = [
+  "package.json",
+  "public/CNAME",
+  "CNAME",
+  "vercel.json",
+  "netlify.toml",
+  "next.config.js",
+  "next.config.mjs",
+  "next.config.ts",
+  "vite.config.js",
+  "vite.config.ts",
+  "astro.config.mjs",
+  "nuxt.config.js",
+  "nuxt.config.ts",
+  "svelte.config.js"
+];
+const QUOTA_SLOW_REMAINING = 200;
+const QUOTA_SLOW_RATIO = 0.15;
+const QUOTA_WARN_REMAINING = 500;
+const QUOTA_WARN_RATIO = 0.3;
+// The absolute `remaining` thresholds above only make sense for large hourly
+// buckets (core/graphql, 5000/hr). Small per-minute buckets like the Search
+// secondary limit (30/min) would otherwise trip "low" at 50% remaining and
+// pause the whole dashboard for a quota that refills in ~60s. For buckets
+// smaller than this floor, judge purely by ratio + reset proximity.
+const QUOTA_ABSOLUTE_LIMIT_FLOOR = 1000;
+const CD_WORKFLOW_CACHE_TTL_MS = 15 * 60 * 1000;
+const WORKFLOW_RUN_CACHE_TTL_MS = 60 * 1000;
+const RUNNING_ACTION_CACHE_TTL_MS = 60 * 1000;
+const RUNNING_DEPLOYMENT_CACHE_TTL_MS = 60 * 1000;
+const OWNER_REPOS_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEPLOYMENT_TARGET_CACHE_TTL_MS = 10 * 60 * 1000;
+// A repo's deploy target almost never changes; cache it (and the "none found"
+// result) for a day so the expensive code/tree probe runs ~4x less often.
+const PRODUCTION_TARGET_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MERGED_PR_CACHE_TTL_MS = 10 * 60 * 1000;
+const RECENT_COMMIT_CACHE_TTL_MS = 5 * 60 * 1000;
+const RUNNING_RUN_STATUSES = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
+const DEPENDABOT_LOGIN = "dependabot[bot]";
+const DEPENDABOT_QUEUE_MAX_THRESHOLD = 5000;
+const DEPENDABOT_QUEUE_THRESHOLD = parseDependabotQueueThreshold(process.env.DEPENDABOT_QUEUE_THRESHOLD);
+const DEPENDABOT_QUEUE_OWNERS = parseOwners(process.env.DEPENDABOT_QUEUE_OWNERS);
+const DEPENDABOT_CLEANUP_COOLDOWN_MS = 5 * 60 * 1000;
+const DEPENDABOT_QUEUE_SCAN_MS = 60 * 1000;
+const DEPENDABOT_CLEANUP_JOBS = 4;
+const FAILED_RUN_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
+const SKIPPED_RUN_CONCLUSIONS = new Set(["skipped"]);
+const FAILED_JOB_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
+const FAILED_CHECK_CONCLUSIONS = new Set(["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+const RUNNING_DEPLOYMENT_STATES = new Set(["queued", "pending", "in_progress"]);
+const SUCCESSFUL_DEPLOYMENT_STATES = new Set(["success"]);
+const AUTO_MERGE_DELAY_MS = 15 * 1000;
+const AUTO_MERGE_SCAN_MS = 60 * 1000;
+const TRACE_CI_SLA_MS = 4 * 60 * 60 * 1000;
+const TRACE_CD_START_SLA_MS = 15 * 60 * 1000;
+const TRACE_PROD_COMPLETE_SLA_MS = 4 * 60 * 60 * 1000;
+const FAILURE_REASON_LABELS = {
+  FAILURE: "failed",
+  ERROR: "errored",
+  CANCELLED: "cancelled",
+  TIMED_OUT: "timed out",
+  ACTION_REQUIRED: "requires action",
+  STARTUP_FAILURE: "failed to start",
+  failure: "failed",
+  cancelled: "cancelled",
+  timed_out: "timed out",
+  action_required: "requires action",
+  startup_failure: "failed to start"
+};
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const autoMergeState = {
+  enabled: false,
+  options: {
+    mode: "all",
+    jobs: 4,
+    owners: []
+  },
+  candidates: new Map(),
+  running: false,
+  timer: null,
+  lastScanAt: null,
+  lastError: ""
+};
+
+const dependabotCleanupState = {
+  running: false,
+  timer: null,
+  queueDepth: 0,
+  lastAttemptAt: 0,
+  blockedUntil: 0,
+  lastScanAt: null,
+  lastCompletedAt: null,
+  lastResult: null,
+  lastError: ""
+};
+
+function sameAutoMergeOwners(a, b) {
+  const left = Array.isArray(a) ? a : [];
+  const right = Array.isArray(b) ? b : [];
+  if (left.length !== right.length) return false;
+  const set = new Set(left.map((value) => String(value).toLowerCase()));
+  return right.every((value) => set.has(String(value).toLowerCase()));
+}
+
+const githubValueCache = new Map();
+
+function run(command, args, { timeoutMs = 120000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: __dirname,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      reject(new Error(stderr.trim() || `${command} exited with code ${code}`));
+    });
+  });
+}
+
+async function getPatToken() {
+  if (!githubTokenPromise) {
+    githubTokenPromise = (async () => {
+      const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+      if (envToken) return envToken;
+      const token = (await run("gh", ["auth", "token"], { timeoutMs: 10000 })).trim();
+      if (!token) {
+        throw new Error("Set GITHUB_TOKEN/GH_TOKEN or authenticate GitHub CLI with `gh auth login`.");
+      }
+      return token;
+    })();
+  }
+  return githubTokenPromise;
+}
+
+async function getGitHubToken({ ownerHint = null } = {}) {
+  if (APP_AUTH_ENABLED) {
+    return getInstallationToken(ownerHint);
+  }
+  const token = await getPatToken();
+  return { token, installationKey: "pat" };
+}
+
+function extractOwnerFromPath(path) {
+  if (!path) return null;
+  let pathname = path;
+  if (path.startsWith("http")) {
+    try {
+      const u = new URL(path);
+      if (u.host !== "api.github.com") return null;
+      pathname = u.pathname;
+    } catch {
+      return null;
+    }
+  }
+  const parts = pathname.replace(/^\/+/, "").split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  const [first, second] = parts;
+  if (first === "repos" || first === "orgs" || first === "users") {
+    return second;
+  }
+  return null;
+}
+
+function buildAppJwtPayload(appId, nowSeconds) {
+  return {
+    iat: nowSeconds - 60,
+    exp: nowSeconds + 540,
+    iss: String(appId)
+  };
+}
+
+function signAppJwt({ appId, privateKey, nowSeconds }) {
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = buildAppJwtPayload(appId, nowSeconds);
+  const encodedHeader = Buffer.from(JSON.stringify(header)).toString("base64url");
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const signer = createSign("RSA-SHA256");
+  signer.update(signingInput);
+  const signature = signer.sign(privateKey, "base64url");
+  return `${signingInput}.${signature}`;
+}
+
+function installationTokenIsValid(entry, nowSeconds) {
+  return Boolean(entry && entry.expiresAt - 90 > nowSeconds);
+}
+
+function expandHomePath(path) {
+  if (!path) return path;
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+let cachedAppJwt = null;
+let cachedPrivateKey = null;
+let installationsByOwner = null;
+const installationTokensByOwner = new Map();
+
+async function loadAppPrivateKey() {
+  if (cachedPrivateKey) return cachedPrivateKey;
+  const resolvedPath = expandHomePath(GITHUB_APP_PRIVATE_KEY_PATH);
+  try {
+    const stats = await stat(resolvedPath);
+    if ((stats.mode & 0o077) !== 0) {
+      console.warn(`[github-monitor] private key at ${resolvedPath} is readable by group/others; run: chmod 600 ${resolvedPath}`);
+    }
+  } catch (error) {
+    throw new Error(`GitHub App private key not found at ${resolvedPath}: ${error.message}`);
+  }
+  cachedPrivateKey = await readFile(resolvedPath, "utf8");
+  return cachedPrivateKey;
+}
+
+async function getAppJwt() {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (cachedAppJwt && cachedAppJwt.expiresAt - 30 > nowSeconds) {
+    return cachedAppJwt.token;
+  }
+  const privateKey = await loadAppPrivateKey();
+  const token = signAppJwt({ appId: GITHUB_APP_ID, privateKey, nowSeconds });
+  cachedAppJwt = { token, expiresAt: nowSeconds + 540 };
+  return token;
+}
+
+async function appAuthorizedRequest(url, init = {}) {
+  const jwt = await getAppJwt();
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${jwt}`,
+      "user-agent": "github-monitor-local",
+      "x-github-api-version": "2022-11-28",
+      ...(init.headers || {})
+    }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`GitHub App request to ${url} failed (${response.status}): ${text}`);
+  }
+  return response.json();
+}
+
+async function discoverInstallations() {
+  if (installationsByOwner) return installationsByOwner;
+  const installations = await appAuthorizedRequest(`${githubApiBase}/app/installations?per_page=100`);
+  const map = new Map();
+  for (const inst of installations) {
+    const owner = inst.account?.login;
+    if (!owner) continue;
+    map.set(owner.toLowerCase(), {
+      installationId: inst.id,
+      accountLogin: owner,
+      accountType: inst.account.type
+    });
+  }
+  installationsByOwner = map;
+  return map;
+}
+
+async function mintInstallationToken(installationId) {
+  const data = await appAuthorizedRequest(
+    `${githubApiBase}/app/installations/${installationId}/access_tokens`,
+    { method: "POST" }
+  );
+  return {
+    token: data.token,
+    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
+  };
+}
+
+async function getInstallationToken(ownerHint) {
+  const installations = await discoverInstallations();
+  if (installations.size === 0) {
+    throw new Error("GitHub App has no installations. Install the app on at least one account.");
+  }
+  const lookupKey = ownerHint ? String(ownerHint).toLowerCase() : null;
+  if (lookupKey && !installations.has(lookupKey)) {
+    throw new HttpError(403, `GitHub App is not installed for owner ${ownerHint}.`);
+  }
+  const installation = lookupKey ? installations.get(lookupKey) : installations.values().next().value;
+  const cacheKey = installation.accountLogin.toLowerCase();
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cached = installationTokensByOwner.get(cacheKey);
+  if (installationTokenIsValid(cached, nowSeconds)) {
+    return { token: cached.token, installationKey: cacheKey };
+  }
+  const minted = await mintInstallationToken(installation.installationId);
+  installationTokensByOwner.set(cacheKey, minted);
+  return { token: minted.token, installationKey: cacheKey };
+}
+
+function githubUrl(path, query = {}) {
+  const url = path.startsWith("http") ? new URL(path) : new URL(path, githubApiBase);
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url;
+}
+
+const etagCache = new Map();
+const ETAG_CACHE_DISABLED = process.env.ETAG_CACHE_DISABLED === "1";
+const ETAG_CACHEABLE_METHODS = new Set(["GET", "HEAD"]);
+const HISTORY_ENABLED = process.env.HISTORY_ENABLED === "1";
+const HISTORY_DIR = process.env.HISTORY_DIR || join(homedir(), ".local", "share", "github-monitor", "history");
+const HISTORY_MAX_FILE_BYTES = 50 * 1024 * 1024;
+const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+function isEtagCacheEnabled() {
+  return !ETAG_CACHE_DISABLED;
+}
+
+function historyBasePath() {
+  return HISTORY_DIR;
+}
+
+function historyFilePath(now = new Date()) {
+  const base = historyBasePath();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  return join(base, String(y), `${m}.jsonl`);
+}
+
+async function ensureHistoryDir() {
+  if (!HISTORY_ENABLED) return null;
+  const base = historyBasePath();
+  await mkdir(base, { recursive: true });
+  return base;
+}
+
+async function appendHistorySnapshot(snapshot) {
+  if (!HISTORY_ENABLED) return;
+  try {
+    const dir = await ensureHistoryDir();
+    if (!dir) return;
+    const filePath = historyFilePath();
+    await mkdir(join(dir, String(new Date().getUTCFullYear())), { recursive: true });
+    const line = JSON.stringify(snapshot) + "\n";
+    await appendFile(filePath, line, "utf8");
+  } catch {
+    // History is best-effort; never block the dashboard on disk errors.
+  }
+}
+
+async function readHistoryFiles(since) {
+  if (!HISTORY_ENABLED) return [];
+  const base = historyBasePath();
+  const cutoff = since ? new Date(since).getTime() : Date.now() - HISTORY_RETENTION_MS;
+  const entries = [];
+  try {
+    const years = await readdir(base).catch(() => []);
+    for (const year of years) {
+      const yearDir = join(base, year);
+      const stat = await stat(yearDir).catch(() => null);
+      if (!stat?.isDirectory()) continue;
+      const months = await readdir(yearDir).catch(() => []);
+      for (const month of months) {
+        const filePath = join(yearDir, month);
+        const fileStat = await stat(filePath).catch(() => null);
+        if (!fileStat?.isFile()) continue;
+        if (fileStat.mtimeMs < cutoff) continue;
+        const text = await readFile(filePath, "utf8").catch(() => "");
+        for (const line of text.split(/\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const entry = JSON.parse(trimmed);
+            const ts = new Date(entry.ts || 0).getTime();
+            if (!Number.isFinite(ts) || ts < cutoff) continue;
+            entries.push(entry);
+          } catch {
+            // Skip malformed lines.
+          }
+        }
+      }
+    }
+  } catch {
+    return [];
+  }
+  return entries.sort((a, b) => String(a.ts || "").localeCompare(String(b.ts || "")));
+}
+
+function summarizeHistory(entries, bucketMs = 60 * 60 * 1000) {
+  if (!entries.length) return { buckets: [], totals: {} };
+  const buckets = new Map();
+  for (const entry of entries) {
+    const ts = new Date(entry.ts || 0).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const key = Math.floor(ts / bucketMs);
+    const current = buckets.get(key) || { ts: new Date(key * bucketMs).toISOString(), scans: 0, repos: 0, passingPrs: 0, failingPrs: 0, runningPrs: 0, runningCd: 0, finishedCd: 0, failedCd: 0, busyRunners: 0 };
+    current.scans += 1;
+    current.repos = Math.max(current.repos, Number(entry.repos) || 0);
+    current.passingPrs = Math.max(current.passingPrs, Number(entry.passingPrs) || 0);
+    current.failingPrs = Math.max(current.failingPrs, Number(entry.failingPrs) || 0);
+    current.runningPrs = Math.max(current.runningPrs, Number(entry.runningPrs) || 0);
+    current.runningCd = Math.max(current.runningCd, Number(entry.runningCd) || 0);
+    current.finishedCd = Math.max(current.finishedCd, Number(entry.finishedCd) || 0);
+    current.failedCd = Math.max(current.failedCd, Number(entry.failedCd) || 0);
+    current.busyRunners = Math.max(current.busyRunners, Number(entry.busyRunners) || 0);
+    buckets.set(key, current);
+  }
+  const sorted = [...buckets.values()].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  const totals = sorted.length ? {
+    scans: sorted.reduce((sum, b) => sum + b.scans, 0),
+    firstTs: sorted[0].ts,
+    lastTs: sorted[sorted.length - 1].ts,
+    avgRepos: Math.round(sorted.reduce((sum, b) => sum + b.repos, 0) / sorted.length),
+    peakFailingPrs: Math.max(...sorted.map((b) => b.failingPrs)),
+    peakRunningCd: Math.max(...sorted.map((b) => b.runningCd))
+  } : {};
+  return { buckets: sorted, totals };
+}
+
+function applyConditionalHeaders(headers, store, url, method) {
+  if (!ETAG_CACHEABLE_METHODS.has(method)) return headers;
+  const cached = store.get(url);
+  if (!cached?.etag) return headers;
+  return { ...headers, "if-none-match": cached.etag };
+}
+
+function takeCachedConditionalResponse(store, url, method, status) {
+  if (status !== 304) return null;
+  if (!ETAG_CACHEABLE_METHODS.has(method)) return null;
+  const cached = store.get(url);
+  if (!cached) return null;
+  return cached.body;
+}
+
+function storeConditionalResponse(store, url, method, response, body) {
+  if (!ETAG_CACHEABLE_METHODS.has(method)) return false;
+  const etag = response.headers.get("etag");
+  if (!etag) {
+    store.delete(url);
+    return false;
+  }
+  store.set(url, { etag, body });
+  return true;
+}
+
+async function githubRequest(path, { method = "GET", query = {}, body, ownerHint } = {}) {
+  const effectiveOwnerHint = ownerHint || extractOwnerFromPath(path);
+  const { token, installationKey } = await getGitHubToken({ ownerHint: effectiveOwnerHint });
+  const url = githubUrl(path, query);
+  const cacheKey = url.toString();
+  const baseHeaders = {
+    "accept": "application/vnd.github+json",
+    "authorization": `Bearer ${token}`,
+    "content-type": "application/json",
+    "user-agent": "github-monitor-local",
+    "x-github-api-version": "2022-11-28"
+  };
+  const headers = isEtagCacheEnabled()
+    ? applyConditionalHeaders(baseHeaders, etagCache, cacheKey, method)
+    : baseHeaders;
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  recordRateLimit(response, { conditional: response.status === 304, installationKey });
+
+  if (isEtagCacheEnabled()) {
+    const cachedBody = takeCachedConditionalResponse(etagCache, cacheKey, method, response.status);
+    if (cachedBody !== null) return cachedBody;
+  }
+
+  const text = await response.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const message = json?.message || text || `GitHub API returned ${response.status}`;
+    throw new HttpError(response.status, message);
+  }
+  if (isEtagCacheEnabled()) {
+    storeConditionalResponse(etagCache, cacheKey, method, response, json);
+  }
+  return json;
+}
+
+function createScanMetrics() {
+  return {
+    startedAt: new Date().toISOString(),
+    requestCount: 0,
+    conditionalHits: 0
+  };
+}
+
+// Server-wide rate-limit bucket cache. Keyed by `${resource}::${installationKey}`.
+// Cumulative across scans so the dashboard chip shows a stable multi-installation
+// view even when a single scan only happens to touch a subset of installations.
+const observedRateBuckets = new Map();
+
+function resetObservedRateBuckets() {
+  observedRateBuckets.clear();
+}
+
+function recordRateLimit(response, { conditional = false, installationKey = "pat" } = {}) {
+  const metrics = scanMetrics.getStore();
+  if (metrics) {
+    metrics.requestCount += 1;
+    if (conditional) metrics.conditionalHits += 1;
+  }
+
+  const limit = Number(response.headers.get("x-ratelimit-limit"));
+  const remaining = Number(response.headers.get("x-ratelimit-remaining"));
+  const used = Number(response.headers.get("x-ratelimit-used"));
+  const reset = Number(response.headers.get("x-ratelimit-reset"));
+  const resource = response.headers.get("x-ratelimit-resource") || "core";
+  if (!Number.isFinite(limit) || !Number.isFinite(remaining) || !Number.isFinite(reset)) return;
+
+  const resetAt = new Date(reset * 1000).toISOString();
+  const key = `${resource}::${installationKey}`;
+  const previous = observedRateBuckets.get(key);
+  const bucket = {
+    resource,
+    installationKey,
+    limit,
+    remaining,
+    used: Number.isFinite(used) ? used : null,
+    resetAt
+  };
+  // Within a single reset window, only ratchet `remaining` downward — never let a
+  // stale out-of-order response bump it back up. After the reset window changes,
+  // accept the fresh quota as the new baseline.
+  if (previous && previous.resetAt === bucket.resetAt && previous.remaining < remaining) {
+    bucket.remaining = previous.remaining;
+  }
+  observedRateBuckets.set(key, bucket);
+}
+
+function snapshotRateLimit(metrics) {
+  const buckets = [...observedRateBuckets.values()].sort((a, b) => {
+    const ratioA = a.remaining / Math.max(1, a.limit);
+    const ratioB = b.remaining / Math.max(1, b.limit);
+    if (ratioA !== ratioB) return ratioA - ratioB;
+    return a.resource.localeCompare(b.resource) || a.installationKey.localeCompare(b.installationKey);
+  });
+  const tightest = buckets[0] || null;
+  const resources = [];
+  const seenResource = new Set();
+  for (const bucket of buckets) {
+    if (seenResource.has(bucket.resource)) continue;
+    seenResource.add(bucket.resource);
+    resources.push(bucket);
+  }
+  return {
+    requestCount: metrics?.requestCount ?? 0,
+    conditionalHits: metrics?.conditionalHits ?? 0,
+    resources,
+    buckets,
+    bucketCount: buckets.length,
+    tightest
+  };
+}
+
+async function cachedGithubValue(key, ttlMs, loader) {
+  const now = Date.now();
+  const cached = githubValueCache.get(key);
+  if (cached?.value !== undefined && cached.expiresAt > now) return cached.value;
+  if (cached?.promise) return cached.promise;
+
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((value) => {
+      githubValueCache.set(key, {
+        value,
+        expiresAt: Date.now() + ttlMs
+      });
+      return value;
+    })
+    .catch((error) => {
+      githubValueCache.delete(key);
+      throw error;
+    });
+
+  githubValueCache.set(key, {
+    promise,
+    expiresAt: now + Math.min(ttlMs, 30 * 1000)
+  });
+  return promise;
+}
+
+function buildDashboardWarnings(rateLimit, summary, options) {
+  const warnings = [];
+  const quota = quotaState(rateLimit);
+  const tightest = quota.tightest;
+  if (!tightest || quota.status === "ok") return warnings;
+
+  if (quota.status === "exhausted") {
+    warnings.push(
+      `GitHub ${tightest.resource} API quota is exhausted until ${new Date(quota.resetAt).toLocaleTimeString()}; refresh is paused.`
+    );
+  } else if (quota.blocked) {
+    warnings.push(
+      `GitHub ${tightest.resource} API quota is low (${tightest.remaining}/${tightest.limit}); refresh is paused until ${new Date(quota.resetAt).toLocaleTimeString()}.`
+    );
+  } else if (options.includeCd && quota.status === "watch") {
+    warnings.push(
+      `GitHub ${tightest.resource} API quota is getting tight (${tightest.remaining}/${tightest.limit}); refresh cadence has slowed.`
+    );
+  }
+  if (options.includeCd && summary.finishedCd === 0 && quota.blocked) {
+    warnings.push("Finished CD can appear empty when GitHub rate limits the workflow scan.");
+  }
+  return warnings;
+}
+
+function quotaState(rateLimit) {
+  const tightest = rateLimit?.tightest || null;
+  if (!tightest) return { status: "unknown", blocked: false, tightest: null };
+  const remaining = Number(tightest.remaining);
+  const limit = Math.max(1, Number(tightest.limit) || 1);
+  const remainingRatio = remaining / limit;
+  const resetAt = tightest.resetAt || "";
+  const retryAfterSeconds = secondsUntil(resetAt) + 30;
+  const absoluteApplies = limit >= QUOTA_ABSOLUTE_LIMIT_FLOOR;
+  if (remaining <= 0) {
+    return { status: "exhausted", blocked: true, tightest, resetAt, retryAfterSeconds };
+  }
+  if (remainingRatio < QUOTA_SLOW_RATIO || (absoluteApplies && remaining < QUOTA_SLOW_REMAINING)) {
+    return { status: "low", blocked: true, tightest, resetAt, retryAfterSeconds };
+  }
+  if (remainingRatio < QUOTA_WARN_RATIO || (absoluteApplies && remaining < QUOTA_WARN_REMAINING)) {
+    return { status: "watch", blocked: false, tightest, resetAt, retryAfterSeconds: 0 };
+  }
+  return { status: "ok", blocked: false, tightest, resetAt, retryAfterSeconds: 0 };
+}
+
+function currentQuotaIsBlocked() {
+  const quota = quotaState(snapshotRateLimit(scanMetrics.getStore() || createScanMetrics()));
+  if (!quota.blocked) return false;
+  const resetAt = new Date(quota.resetAt || 0).getTime();
+  return !Number.isFinite(resetAt) || resetAt > Date.now();
+}
+
+function recommendRefresh(summary, options, rateLimit) {
+  const activeCount = summary.runningPrs + summary.runningCd + summary.runningDeployments + summary.busyRunners;
+  const problemCount = summary.failingPrs + summary.failedCd;
+  let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
+
+  if (options.mode === "all") intervalSeconds += 60;
+  if (options.includeCd) intervalSeconds += 60;
+  if (options.includeRepoRunners) intervalSeconds += 120;
+
+  const quota = quotaState(rateLimit);
+  const tightest = quota.tightest;
+  if (tightest) {
+    if (quota.blocked) {
+      intervalSeconds = Math.max(intervalSeconds, quota.retryAfterSeconds);
+    } else if (quota.status === "watch") {
+      intervalSeconds = Math.max(intervalSeconds, 420);
+    }
+  }
+
+  intervalSeconds = Math.max(45, Math.min(intervalSeconds, quota.blocked ? 7200 : 3900));
+  return {
+    intervalSeconds,
+    nextRefreshAt: new Date(Date.now() + intervalSeconds * 1000).toISOString(),
+    reason: refreshReason(activeCount, problemCount, quota),
+    quota: {
+      status: quota.status,
+      blocked: quota.blocked,
+      resource: tightest?.resource || "",
+      remaining: tightest?.remaining ?? null,
+      limit: tightest?.limit ?? null,
+      resetAt: quota.resetAt || "",
+      retryAfterSeconds: quota.retryAfterSeconds || 0
+    }
+  };
+}
+
+function secondsUntil(isoDate) {
+  const delta = Math.ceil((new Date(isoDate).getTime() - Date.now()) / 1000);
+  return Number.isFinite(delta) ? Math.max(0, delta) : 0;
+}
+
+function refreshReason(activeCount, problemCount, quota) {
+  if (quota?.blocked) {
+    return `Paused for ${quota.tightest.resource} API quota`;
+  }
+  if (quota?.status === "watch") {
+    return `Slowed for ${quota.tightest.resource} API quota`;
+  }
+  if (activeCount > 0) return "Active work detected";
+  if (problemCount > 0) return "Open failures detected";
+  return "Quiet dashboard";
+}
+
+async function githubGraphql(query, variables, { ownerHint } = {}) {
+  const json = await githubRequest(githubGraphqlUrl, {
+    method: "POST",
+    body: { query, variables },
+    ownerHint
+  });
+  if (json?.errors?.length) {
+    throw new Error(json.errors.map((error) => error.message).join("; "));
+  }
+  return json;
+}
+
+async function githubRestPage(path, page, perPage = 100, query = {}, ownerHint) {
+  return githubRequest(path, { query: { ...query, per_page: perPage, page }, ownerHint });
+}
+
+async function githubRestAll(path, pickItems, perPage = 100, query = {}, ownerHint) {
+  const results = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const json = await githubRestPage(path, page, perPage, query, ownerHint);
+    const items = pickItems(json);
+    if (!items.length) break;
+    results.push(...items);
+    if (items.length < perPage) break;
+  }
+  return results;
+}
+
+async function githubRestAllWithinQuota(path, pickItems, perPage = 100, query = {}, ownerHint) {
+  const results = [];
+  for (let page = 1; page <= 50; page += 1) {
+    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for Dependabot cleanup.");
+    const json = await githubRestPage(path, page, perPage, query, ownerHint);
+    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for Dependabot cleanup.");
+    const items = pickItems(json);
+    if (!items.length) break;
+    results.push(...items);
+    if (items.length < perPage) break;
+  }
+  return results;
+}
+
+async function mapLimit(items, limit, mapper) {
+  const output = [];
+  let index = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length || 1)) }, async () => {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      output[current] = await mapper(items[current], current);
+    }
+  });
+  await Promise.all(workers);
+  return output;
+}
+
+function uniqueBy(items, keyFn) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = keyFn(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeMode(value) {
+  if (["mine", "owned", "all"].includes(value)) return value;
+  return "all";
+}
+
+function parseBool(value, fallback = false) {
+  if (value == null) return fallback;
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function parseJobs(value) {
+  const jobs = Number(value || process.env.OPEN_PRS_JOBS || 4);
+  if (!Number.isInteger(jobs) || jobs < 1) return 4;
+  return Math.min(jobs, 16);
+}
+
+function parseDependabotQueueThreshold(value, fallback = 0) {
+  if (value == null || value === "") return fallback;
+  const threshold = Number(value);
+  if (!Number.isInteger(threshold) || threshold < 0 || threshold > DEPENDABOT_QUEUE_MAX_THRESHOLD) return fallback;
+  return threshold;
+}
+
+function isDependabotLogin(value) {
+  return String(value || "").toLowerCase() === DEPENDABOT_LOGIN;
+}
+
+function isDependabotWorkflowRun(run) {
+  return isDependabotLogin(run?.actor?.login || run?.actor) ||
+    isDependabotLogin(run?.triggering_actor?.login || run?.triggeringActor);
+}
+
+function dependabotQueueDepth(runs) {
+  return uniqueBy(
+    (runs || []).filter((run) => run?.status === "queued"),
+    (run) => `${run.repo || ""}:${run.runId || run.id || run.url || JSON.stringify(run)}`
+  ).length;
+}
+
+function shouldCleanDependabotQueue(queueDepth, threshold = DEPENDABOT_QUEUE_THRESHOLD) {
+  return threshold > 0 && queueDepth >= threshold;
+}
+
+// Dependabot's own update runs (`dynamic/dependabot/dependabot-updates` and the
+// like) fail on Dependabot's schedule with no pull request to close and no
+// completed run to cancel — cleanup can never resolve them, so they sit in
+// Failing CI forever. When cleanup is opted in, hand them to the dashboard
+// pre-dismissed: they leave the actionable list and the tile counts but stay
+// reachable behind the dismissed bar's "Show" toggle.
+function markAutoDismissedDependabotRuns(runs, { enabled = DEPENDABOT_QUEUE_THRESHOLD > 0 } = {}) {
+  if (!enabled || !Array.isArray(runs)) return runs || [];
+  return runs.map((run) => (run?.dependabot
+    ? { ...run, autoDismissed: true, autoDismissReason: "Dependabot run — auto-dismissed by cleanup" }
+    : run));
+}
+
+const IGNORED_RUN_URLS = parseIgnoredRunUrls(process.env.IGNORED_RUN_URLS || "https://github.com/ryabinski-labs/echothread/actions/runs/31115181511");
+
+function parseIgnoredRunUrls(value) {
+  if (value == null) return new Set(["https://github.com/ryabinski-labs/echothread/actions/runs/31115181511"]);
+  const raw = Array.isArray(value) ? value : String(value).split(",");
+  const set = new Set(["https://github.com/ryabinski-labs/echothread/actions/runs/31115181511"]);
+  for (const item of raw) {
+    const trimmed = String(item || "").trim();
+    if (trimmed) set.add(trimmed);
+  }
+  return set;
+}
+
+function markIgnoredRuns(runs) {
+  if (!IGNORED_RUN_URLS.size || !Array.isArray(runs)) return runs || [];
+  return runs.map((run) => (run?.url && IGNORED_RUN_URLS.has(run.url)
+    ? { ...run, autoDismissed: true, autoDismissReason: "Stuck/outage run — auto-dismissed" }
+    : run));
+}
+
+function parseOwners(value) {
+  if (value == null) return [];
+  const raw = Array.isArray(value) ? value : String(value).split(",");
+  const seen = new Set();
+  const owners = [];
+  for (const item of raw) {
+    const trimmed = String(item || "").trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    owners.push(trimmed);
+  }
+  return owners;
+}
+
+function parseRepo(value) {
+  const repo = String(value || "").trim();
+  const [owner, name, extra] = repo.split("/");
+  if (!owner || !name || extra) {
+    throw new HttpError(400, "Expected repo in owner/name format.");
+  }
+  return { owner, name, repo };
+}
+
+function parsePullNumber(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) {
+    throw new HttpError(400, "Expected a positive pull request number.");
+  }
+  return number;
+}
+
+function isWithinFailedCdWindow(value, now = Date.now()) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && now - time <= FAILED_CD_MAX_AGE_MS;
+}
+
+function isWithinFailedActionWindow(value, now = Date.now()) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && now - time <= FAILED_ACTION_MAX_AGE_MS;
+}
+
+function selectFailedCdRuns(runs, { now = Date.now() } = {}) {
+  if (!Array.isArray(runs)) return [];
+  return runs.filter((run) => {
+    if (!run || run.status !== "completed") return false;
+    if (!FAILED_RUN_CONCLUSIONS.has(run.conclusion)) return false;
+    return isWithinFailedCdWindow(run.updated_at || run.created_at, now);
+  });
+}
+
+function findSupersedingSuccessfulRun(completedRunsNewestFirst, failedRun) {
+  if (!Array.isArray(completedRunsNewestFirst) || !failedRun) return null;
+  const idx = completedRunsNewestFirst.indexOf(failedRun);
+  if (idx <= 0) return null;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (runOutcome(completedRunsNewestFirst[i]) === "success") return completedRunsNewestFirst[i];
+  }
+  return null;
+}
+
+function sameWorkflowRunLane(left, right) {
+  if (!left || !right) return false;
+  const leftWorkflow = left.path || left.name || "";
+  const rightWorkflow = right.path || right.name || "";
+  return leftWorkflow === rightWorkflow && (left.head_branch || "") === (right.head_branch || "");
+}
+
+// A failure is only worth surfacing if it is the latest completed run in its
+// lane (same workflow + branch). Any newer completed run supersedes it: a later
+// success means the retry delivered, and a later failure means this older run is
+// stale noise — either way we show at most the lane's current state, once.
+function hasNewerCompletedRunInLane(completedRunsNewestFirst, failedRun) {
+  if (!Array.isArray(completedRunsNewestFirst) || !failedRun) return false;
+  const idx = completedRunsNewestFirst.indexOf(failedRun);
+  if (idx <= 0) return false;
+  for (let i = idx - 1; i >= 0; i--) {
+    if (sameWorkflowRunLane(completedRunsNewestFirst[i], failedRun)) return true;
+  }
+  return false;
+}
+
+function selectFailedActionRuns(runs, { now = Date.now() } = {}) {
+  if (!Array.isArray(runs)) return [];
+  const completedRuns = runs.filter((run) => run?.status === "completed");
+  return completedRuns.filter((run) => {
+    if (isCdWorkflowRun(run)) return false;
+    if (run.event === "pull_request" || run.event === "pull_request_target") return false;
+    if (!FAILED_RUN_CONCLUSIONS.has(run.conclusion)) return false;
+    if (!isWithinFailedActionWindow(run.updated_at || run.created_at, now)) return false;
+    return !hasNewerCompletedRunInLane(completedRuns, run);
+  });
+}
+
+function isWithinFinishedCdWindow(value) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && Date.now() - time <= FINISHED_CD_MAX_AGE_MS;
+}
+
+function checkFinished(check) {
+  if (check.__typename === "CheckRun") return check.status === "COMPLETED";
+  return check.state !== "PENDING" && check.state !== "EXPECTED";
+}
+
+function checkFailed(check) {
+  const conclusion = check.__typename === "CheckRun" ? check.conclusion : check.state;
+  return FAILED_CHECK_CONCLUSIONS.has(conclusion);
+}
+
+function checkName(check) {
+  if (check.__typename === "CheckRun") {
+    const workflow = check.checkSuite?.workflowRun?.workflow?.name;
+    const prefix = workflow ? `${workflow}/` : "";
+    return `${prefix}${check.name || "unnamed check"}`;
+  }
+  return check.context || "status context";
+}
+
+function failureLabel(value) {
+  return FAILURE_REASON_LABELS[value] || String(value || "failed").toLowerCase().replaceAll("_", " ");
+}
+
+function failedCheckLabel(check) {
+  const conclusion = check.__typename === "CheckRun" ? check.conclusion : check.state;
+  return `${checkName(check)} ${failureLabel(conclusion)}`;
+}
+
+function failureReasonFromChecks(checks) {
+  const failedChecks = [...new Set(checks.filter(checkFailed).map(failedCheckLabel))];
+  if (!failedChecks.length) return { failedChecks, failureReason: "" };
+  const suffix = failedChecks.length > 3 ? `, +${failedChecks.length - 3} more` : "";
+  return {
+    failedChecks,
+    failureReason: `${failedChecks.slice(0, 3).join(", ")}${suffix}`
+  };
+}
+
+function cdFailureReason(conclusion) {
+  return `Workflow ${failureLabel(conclusion)}`;
+}
+
+function runOutcome(run) {
+  const conclusion = String(run?.conclusion || "").toLowerCase();
+  if (FAILED_RUN_CONCLUSIONS.has(conclusion)) return "failure";
+  if (SKIPPED_RUN_CONCLUSIONS.has(conclusion)) return "skipped";
+  if (conclusion === "success") return "success";
+  if (conclusion === "neutral") return "success";
+  return conclusion || "completed";
+}
+
+async function fetchWorkflowRunSkipReason(repo, run) {
+  if (!run?.id) return "";
+  try {
+    const jobs = await githubRestAll(
+      `/repos/${repo}/actions/runs/${run.id}/jobs`,
+      (json) => json?.jobs || [],
+      100,
+      { filter: "latest" }
+    );
+    if (!jobs.length) return "";
+    const skippedJobs = [...new Set(jobs.filter((job) => String(job.conclusion || "").toLowerCase() === "skipped").map((job) => job.name || "unnamed job"))];
+    if (!skippedJobs.length) return "";
+    const suffix = skippedJobs.length > 3 ? `, +${skippedJobs.length - 3} more` : "";
+    return `Skipped jobs: ${skippedJobs.slice(0, 3).join(", ")}${suffix}`;
+  } catch {
+    return "";
+  }
+}
+
+function shortSha(value) {
+  return String(value || "").slice(0, 7);
+}
+
+function publicRouteFromFile(filename) {
+  const path = String(filename || "").replaceAll("\\", "/").replace(/^src\//, "");
+  const appMatch = path.match(/^app\/(.+)\.(?:jsx?|tsx?|mdx)$/);
+  if (appMatch && ["page", "layout"].includes(appMatch[1].split("/").at(-1))) {
+    return routeFromSegments(appMatch[1].split("/").slice(0, -1));
+  }
+
+  const pagesMatch = path.match(/^pages\/(.+)\.(?:jsx?|tsx?|mdx)$/);
+  if (pagesMatch && !pagesMatch[1].startsWith("api/") && !pagesMatch[1].startsWith("_")) {
+    return routeFromSegments(pagesMatch[1].split("/"));
+  }
+
+  const publicMatch = path.match(/^public\/(.+)$/);
+  if (publicMatch && !publicMatch[1].startsWith(".")) {
+    return `/${publicMatch[1].replace(/^index\.html$/, "")}`.replace(/\/$/, "/");
+  }
+
+  return "";
+}
+
+function routeFromSegments(segments) {
+  const visible = segments
+    .filter((segment) => segment && !segment.startsWith("(") && !segment.startsWith("@"))
+    .map((segment) => segment.replace(/^index$/, "").replace(/^\[\.\.\.(.+)\]$/, ":$1").replace(/^\[(.+)\]$/, ":$1"))
+    .filter(Boolean);
+  return `/${visible.join("/")}`.replace(/\/+/g, "/");
+}
+
+function joinUrl(base, route) {
+  if (!base || !route) return "";
+  try {
+    return new URL(route.replace(/^\//, ""), base.endsWith("/") ? base : `${base}/`).toString();
+  } catch {
+    return "";
+  }
+}
+
+function isBackendUrl(url) {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    const parts = host.split(".");
+    return parts.some((part) =>
+      part === "api" ||
+      part === "backend" ||
+      part === "srv" ||
+      part.startsWith("api-") ||
+      part.endsWith("-api") ||
+      part.startsWith("backend-") ||
+      part.endsWith("-backend")
+    );
+  } catch {
+    return false;
+  }
+}
+
+const PRODUCTION_TLDS = new Set([
+  "ai", "app", "au", "biz", "ca", "cc", "cloud", "co", "com", "de", "dev", "digital", "dk",
+  "email", "es", "fi", "finance", "fr", "in", "info", "io", "is", "it", "link", "live", "me",
+  "money", "net", "nl", "no", "org", "page", "se", "site", "software", "systems", "tech",
+  "today", "tools", "tv", "uk", "us", "world", "xyz"
+]);
+
+function normalizeWebUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  try {
+    const cleaned = trimmed.replace(/[),.;\]}]+$/, "");
+    const url = new URL(cleaned.startsWith("http") ? cleaned : `https://${cleaned}`);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    if (["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function likelyProductionUrl(value) {
+  const url = normalizeWebUrl(value);
+  if (!url) return "";
+  try {
+    const host = new URL(url).hostname;
+    const tld = host.split(".").at(-1)?.toLowerCase() || "";
+    if (!/^[a-z0-9.-]+$/i.test(host)) return "";
+    if (!PRODUCTION_TLDS.has(tld)) return "";
+    if ([
+      "cjs", "css", "env", "example", "html", "js", "json", "jsx", "lock", "local", "map",
+      "md", "mjs", "php", "py", "rb", "sh", "sitemap", "test", "toml", "ts", "tsx", "txt", "xml", "yaml", "yml"
+    ].includes(tld)) return "";
+    if (host === "example.com" || host.endsWith(".example.com")) return "";
+    if (host === "github.com" || host.endsWith(".github.com")) return "";
+    if (host === "npmjs.com" || host.endsWith(".npmjs.com")) return "";
+    if (host === "schema.org" || host.endsWith(".schema.org")) return "";
+    if (host === "amazonaws.com" || host.endsWith(".amazonaws.com")) return "";
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "";
+    if (host.startsWith("docs.") || host.startsWith("www.docs.")) return "";
+    return `${new URL(url).origin}/`;
+  } catch {
+    return "";
+  }
+}
+
+function firstProductionUrl(values) {
+  for (const value of values.flat().filter(Boolean)) {
+    const url = likelyProductionUrl(value);
+    if (url) return url;
+  }
+  return "";
+}
+
+function extractProductionUrlsFromText(text) {
+  const source = String(text || "");
+  const urls = [...source.matchAll(/https?:\/\/[^\s"'`<>)]+/gi)].map((match) => match[0]);
+  const envUrls = [...source.matchAll(/\b(?:SITE_URL|APP_URL|PUBLIC_URL|NEXT_PUBLIC_SITE_URL|VITE_SITE_URL)\s*[:=]\s*["']?([^"'\s,}]+)/gi)]
+    .map((match) => match[1]);
+  const urlHosts = new Set(urls.map((value) => {
+    try {
+      return new URL(value).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  }).filter(Boolean));
+  const bareDomains = [...source.matchAll(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/[^\s"'`<>)]*)?/gi)]
+    .map((match) => match[0])
+    .filter((value) => !value.includes("@"))
+    .filter((value) => {
+      try {
+        return !urlHosts.has(new URL(`https://${value}`).hostname.toLowerCase());
+      } catch {
+        return true;
+      }
+    });
+  return [...new Set([...urls, ...envUrls, ...bareDomains])];
+}
+
+function hostLooksDeployable(host) {
+  return [
+    ".cloudfront.net",
+    ".vercel.app",
+    ".netlify.app",
+    ".amplifyapp.com",
+    ".pages.dev",
+    ".firebaseapp.com",
+    ".web.app",
+    ".onrender.com",
+    ".fly.dev",
+    ".herokuapp.com",
+    ".azurewebsites.net"
+  ].some((suffix) => host.endsWith(suffix));
+}
+
+function productionUrlScore(url, sourcePath, repo) {
+  const normalized = likelyProductionUrl(url);
+  if (!normalized) return 0;
+  let parsed;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    return 0;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const source = String(sourcePath || "").toLowerCase();
+  const repoName = repo.split("/").at(-1)?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
+  const isProviderHost = hostLooksDeployable(host);
+  let score = 1;
+  if (parsed.protocol === "https:") score += 1;
+  if (isProviderHost) score += 2;
+  if (!isProviderHost) score += 7;
+  if (repoName && host.replace(/[^a-z0-9]/g, "").includes(repoName)) score += 4;
+  if (/(prod|production|domain|site|url|deploy|cloudfront|amplify|vercel|netlify)/.test(normalized.toLowerCase())) score += 3;
+  if (/(readme|deploy|prod|production|infra|cdk|stack|cloudfront|route53|domain|config|env|serverless|terraform|sst)/.test(source)) score += 2;
+  if (/cloudfront\.net$/.test(host)) score -= 3;
+  if (/(test|spec|mock|fixture|example|sample)/.test(source)) score -= 3;
+  if (/(amazonaws\.com\/documentation|docs\.aws\.amazon\.com|developer\.mozilla\.org|vitejs\.dev|nextjs\.org|react\.dev)/.test(host)) score = 0;
+  return Math.max(0, score);
+}
+
+function bestProductionUrlCandidate(candidates, repo) {
+  return candidates
+    .map((candidate) => ({
+      ...candidate,
+      url: likelyProductionUrl(candidate.url),
+      score: productionUrlScore(candidate.url, candidate.source, repo)
+    }))
+    .filter((candidate) => candidate.url && candidate.score > 0)
+    .sort((a, b) => b.score - a.score || a.source.localeCompare(b.source))[0] || null;
+}
+
+function changeCue(filename, status = "") {
+  const path = String(filename || "").toLowerCase();
+  const action = status === "removed" ? "was removed" : status === "added" ? "was added" : "changed";
+  if (/\.(css|scss|sass|less)$/.test(path)) return `Visual styling ${action}; check spacing, colors, responsive layout, and hover/focus states.`;
+  if (/(^|\/)(page|layout)\.(jsx?|tsx?|mdx)$/.test(path) || /(^|\/)pages\/.+\.(jsx?|tsx?|mdx)$/.test(path)) {
+    return `The rendered page ${action}; check copy, layout, primary actions, and empty/error states.`;
+  }
+  if (/\/components?\//.test(path) || /\.(jsx?|tsx?)$/.test(path)) return `Shared UI or client behavior ${action}; check screens that use this component.`;
+  if (/\.(md|mdx)$/.test(path)) return `Content ${action}; check headings, links, and any rendered documentation page.`;
+  if (/(^|\/)(api|server|route)\b/.test(path)) return `Backend or route behavior ${action}; check the user flow that depends on this endpoint.`;
+  if (/(^|\/)(package-lock\.json|package\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(path)) return `Dependencies ${action}; check build output and dependency-sensitive screens.`;
+  if (/(^|\/)\.github\/workflows\//.test(path)) return `Automation ${action}; check that deployment and release steps still run as expected.`;
+  return `File ${action}; check the nearby feature or content that depends on it.`;
+}
+
+function changeLabel(filename) {
+  const route = publicRouteFromFile(filename);
+  if (route) return route;
+  return String(filename || "Changed file").split("/").at(-1) || "Changed file";
+}
+
+function buildChangedPages(files, deployTarget = {}) {
+  const seen = new Set();
+  return files
+    .map((file) => {
+      const route = publicRouteFromFile(file.filename);
+      if (!route || seen.has(route)) return null;
+      seen.add(route);
+      const sourcePath = file.filename || "";
+      return {
+        label: route,
+        path: route,
+        url: joinUrl(deployTarget.url, route),
+        sourcePath,
+        sourceUrl: file.blob_url || "",
+        environment: deployTarget.environment || "",
+        lookFor: `${changeCue(sourcePath, file.status)}${route.includes(":") ? " Replace the route parameter with a real production item before checking." : ""}`
+      };
+    })
+    .filter(Boolean);
+}
+
+const ROUTE_HINTS = [
+  { pattern: /dashboard|overview|home/i, routes: ["/dashboard"] },
+  { pattern: /signup|sign-up|register|registration/i, routes: ["/signup"] },
+  { pattern: /login|log-in|signin|sign-in|magic[-_\s]?link|auth/i, routes: ["/login"] },
+  { pattern: /invite|invitation/i, routes: ["/invitations", "/invite"] },
+  { pattern: /assessment|audit|questionnaire/i, routes: ["/assessment"] },
+  { pattern: /security|password|jwt|session/i, routes: ["/settings/security", "/login"] },
+  { pattern: /transaction|transactions/i, routes: ["/transactions"] },
+  { pattern: /plaid|depository|deposit|account|accounts/i, routes: ["/accounts"] },
+  { pattern: /billing|subscription|plan|pricing/i, routes: ["/billing", "/settings/billing"] },
+  { pattern: /profile|user|member/i, routes: ["/profile", "/settings/profile"] },
+  { pattern: /settings|preferences/i, routes: ["/settings"] },
+  { pattern: /admin/i, routes: ["/admin"] }
+];
+
+function inferredRoutesFromChange(title = "", files = []) {
+  const source = [
+    title,
+    ...files.map((file) => file.filename || file.path || "")
+  ].join(" ");
+  const routes = [];
+  for (const hint of ROUTE_HINTS) {
+    if (!hint.pattern.test(source)) continue;
+    routes.push(...hint.routes);
+  }
+  return [...new Set(routes)].slice(0, 4);
+}
+
+function buildInferredProductionPages(title, files, deployTarget = {}) {
+  if (!deployTarget.url) return [];
+  return inferredRoutesFromChange(title, files).map((route) => ({
+    label: route,
+    path: route,
+    url: joinUrl(deployTarget.url, route),
+    sourcePath: "inferred from PR title/files",
+    sourceUrl: "",
+    environment: deployTarget.environment || "production",
+    lookFor: "Inferred production page; verify the affected behavior visually."
+  }));
+}
+
+function buildMergedPullRequestSummary(pr, files = [], deployTarget = {}) {
+  const visibleFiles = files.slice(0, MERGED_PR_FILE_LINK_LIMIT);
+  const changedPages = buildChangedPages(files, deployTarget);
+  const inferredPages = changedPages.length ? [] : buildInferredProductionPages(pr.title, files, deployTarget);
+  const filesChanged = files.length || Number(pr.changed_files || 0);
+  const productionUrl = deployTarget.url || "";
+  return {
+    number: pr.number,
+    numberLabel: `#${pr.number}`,
+    title: pr.title || "Merged pull request",
+    author: pr.user?.login || "unknown",
+    mergedAt: pr.merged_at || pr.closed_at || "",
+    url: pr.html_url || "",
+    productionUrl,
+    productionEnvironment: deployTarget.environment || "",
+    filesChanged,
+    changedPages: changedPages.length ? changedPages : inferredPages,
+    inferredPages: !changedPages.length && inferredPages.length > 0,
+    changedFiles: visibleFiles.map((file) => ({
+      path: file.filename || "",
+      status: file.status || "",
+      additions: Number(file.additions || 0),
+      deletions: Number(file.deletions || 0),
+      url: file.blob_url || "",
+      lookFor: changeCue(file.filename, file.status)
+    })),
+    hiddenFileCount: Math.max(0, filesChanged - visibleFiles.length),
+    lookFor: changedPages.length
+      ? `Open ${changedPages.map((page) => page.label).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior described by this PR.`
+      : files.length
+      ? `Open the PR files and verify the changed feature areas, especially ${visibleFiles.map((file) => file.filename).slice(0, 3).join(", ")}.`
+      : "Open the PR and Files tab to verify what changed."
+  };
+}
+
+function summarizeMergedPullRequests(pullRequests = [], deployTarget = {}) {
+  return pullRequests.map((item) => buildMergedPullRequestSummary(item.pr, item.files, deployTarget));
+}
+
+function commitChangedPages(commit, deployTarget = {}) {
+  return buildChangedPages(commit.files || [], deployTarget);
+}
+
+function buildCommitSummary(commit, deployTarget = {}) {
+  const files = Array.isArray(commit.files) ? commit.files : [];
+  const message = commit.commit?.message || "";
+  const changedPages = commitChangedPages({ files }, deployTarget);
+  const inferredPages = changedPages.length ? [] : buildInferredProductionPages(message, files, deployTarget);
+  const visibleFiles = files.slice(0, MERGED_PR_FILE_LINK_LIMIT);
+  const productionUrl = deployTarget.url || "";
+  return {
+    sha: commit.sha || "",
+    shortSha: shortSha(commit.sha),
+    message: message.split("\n").find(Boolean) || "Commit",
+    author: commit.commit?.author?.name || commit.author?.login || "unknown",
+    committedAt: commit.commit?.author?.date || commit.commit?.committer?.date || "",
+    url: commit.html_url || "",
+    productionUrl,
+    productionEnvironment: deployTarget.environment || "",
+    filesChanged: files.length,
+    changedPages: changedPages.length ? changedPages : inferredPages,
+    inferredPages: !changedPages.length && inferredPages.length > 0,
+    changedFiles: visibleFiles.map((file) => ({
+      path: file.filename || "",
+      status: file.status || "",
+      additions: Number(file.additions || 0),
+      deletions: Number(file.deletions || 0),
+      url: file.blob_url || "",
+      lookFor: changeCue(file.filename, file.status)
+    })),
+    hiddenFileCount: Math.max(0, files.length - visibleFiles.length),
+    lookFor: changedPages.length
+      ? `Open ${changedPages.map((page) => page.label).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior changed by this commit.`
+      : files.length
+      ? `Open the commit files and verify the changed areas, especially ${visibleFiles.map((file) => file.filename).slice(0, 3).join(", ")}.`
+      : "Open the commit to inspect the shipped change."
+  };
+}
+
+function buildReviewLinks(repo, branch = "") {
+  const encodedQuery = encodeURIComponent(`is:pr is:merged sort:updated-desc`);
+  const branchPath = branch ? `/${encodeURIComponent(branch)}` : "";
+  return {
+    mergedPullRequestsUrl: `https://github.com/${repo}/pulls?q=${encodedQuery}`,
+    commitsUrl: `https://github.com/${repo}/commits${branchPath}`,
+    compareHelpUrl: `https://github.com/${repo}/compare`,
+    repoUrl: `https://github.com/${repo}`
+  };
+}
+
+function buildChangeSummary(repo, run, changeSet, deployTarget = {}, options = {}) {
+  const sha = run?.head_sha || changeSet?.sha || run?.head_commit?.id || "";
+  const files = Array.isArray(changeSet?.files) ? changeSet.files : [];
+  const additions = changeSet?.stats?.additions ?? files.reduce((total, file) => total + Number(file.additions || 0), 0);
+  const deletions = changeSet?.stats?.deletions ?? files.reduce((total, file) => total + Number(file.deletions || 0), 0);
+  const commitCount = Number(changeSet?.total_commits || changeSet?.commits?.length || (changeSet?.sha ? 1 : 0));
+  const changedFiles = files.map((file) => ({
+    path: file.filename || "",
+    status: file.status || "",
+    additions: Number(file.additions || 0),
+    deletions: Number(file.deletions || 0),
+    changes: Number(file.changes || 0),
+    url: file.blob_url || ""
+  }));
+  const changedPages = buildChangedPages(files, deployTarget);
+  const visibleFiles = changedFiles.slice(0, CHANGE_FILE_LINK_LIMIT);
+  const hiddenFileCount = Math.max(0, changedFiles.length - visibleFiles.length);
+  const latestCommit = Array.isArray(changeSet?.commits) ? changeSet.commits.at(-1) : null;
+  const message = latestCommit?.commit?.message || changeSet?.commit?.message || run?.head_commit?.message || run?.display_title || "";
+  const firstLine = message.split("\n").find(Boolean) || run?.display_title || "No commit message available";
+  const source = options.source || (changeSet?.total_commits != null ? "compare" : "commit");
+  const sourceLabel = source === "compare"
+    ? `${shortSha(options.baseSha)}...${shortSha(sha)}`
+    : shortSha(sha);
+
+  return {
+    sha,
+    shortSha: shortSha(sha),
+    baseSha: options.baseSha || "",
+    source,
+    sourceLabel,
+    commitCount,
+    commitUrl: changeSet?.html_url || "",
+    message: firstLine,
+    author: latestCommit?.commit?.author?.name || changeSet?.commit?.author?.name || run?.head_commit?.author?.name || "",
+    filesChanged: changedFiles.length,
+    additions: Number(additions || 0),
+    deletions: Number(deletions || 0),
+    deployUrl: deployTarget.url || "",
+    environment: deployTarget.environment || "",
+    changedPages,
+    changedFiles: visibleFiles.map((file) => ({
+      ...file,
+      label: changeLabel(file.path),
+      lookFor: changeCue(file.path, file.status)
+    })),
+    hiddenFileCount,
+    mergedPullRequests: summarizeMergedPullRequests(options.mergedPullRequests, deployTarget),
+    recentCommits: (options.recentCommits || []).map((commit) => buildCommitSummary(commit, deployTarget)),
+    reviewLinks: buildReviewLinks(repo, run?.head_branch || ""),
+    lookFor: changedPages.length
+      ? `Open the changed page links and verify the rendered routes affected by ${changedPages.map((page) => page.sourcePath).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related files" : ""}${source === "compare" ? " since the previous completed CD run" : ""}.`
+      : options.mergedPullRequests?.length
+      ? `No deployment diff was available for this run. Use the recent merged PR summary below to inspect the latest shipped work.`
+      : options.recentCommits?.length
+      ? `No deployment diff or merged PR metadata was available. Use the recent commit summary below to inspect the latest shipped work.`
+      : `GitHub did not return deployment diff, merged PR, or commit metadata for this run. Use the manual review links below to inspect merged PRs, commit history, or compare changes in GitHub.`
+  };
+}
+
+async function fetchWorkflowRunChangeSummary(repo, run, deployTarget, previousRun = null, mergedPullRequests = [], recentCommits = []) {
+  const sha = run?.head_sha || run?.head_commit?.id;
+  if (!sha) return buildChangeSummary(repo, run, null, deployTarget, { mergedPullRequests, recentCommits });
+  const baseSha = previousRun?.head_sha || previousRun?.head_commit?.id || "";
+  if (baseSha && baseSha !== sha) {
+    try {
+      const compare = await githubRequest(`/repos/${repo}/compare/${baseSha}...${sha}`);
+      return buildChangeSummary(repo, run, compare, deployTarget, { source: "compare", baseSha, mergedPullRequests, recentCommits });
+    } catch {
+      // Fall back to the head commit below.
+    }
+  }
+  try {
+    const commit = await githubRequest(`/repos/${repo}/commits/${sha}`);
+    return buildChangeSummary(repo, run, commit, deployTarget, { mergedPullRequests, recentCommits });
+  } catch {
+    return buildChangeSummary(repo, run, null, deployTarget, { mergedPullRequests, recentCommits });
+  }
+}
+
+function failedJobLabel(job) {
+  return `${job.name || "unnamed job"} ${failureLabel(job.conclusion)}`;
+}
+
+async function fetchWorkflowRunFailureReason(repo, run) {
+  const fallback = cdFailureReason(run?.conclusion);
+  if (!run?.id) return fallback;
+  try {
+    const jobs = await githubRestAll(
+      `/repos/${repo}/actions/runs/${run.id}/jobs`,
+      (json) => json?.jobs || [],
+      100,
+      { filter: "latest" }
+    );
+    const failedJobs = [...new Set(jobs.filter((job) => FAILED_JOB_CONCLUSIONS.has(job.conclusion)).map(failedJobLabel))];
+    if (!failedJobs.length) return fallback;
+    const suffix = failedJobs.length > 3 ? `, +${failedJobs.length - 3} more` : "";
+    return `${failedJobs.slice(0, 3).join(", ")}${suffix}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function runningCheckLabel(check) {
+  if (check.__typename === "CheckRun") {
+    const workflow = check.checkSuite?.workflowRun?.workflow?.name;
+    const prefix = workflow ? `${workflow}/` : "";
+    return `${prefix}${check.name || "unnamed check"} [${check.status || "UNKNOWN"}]`;
+  }
+  return `${check.context || "status context"} [${check.state || "UNKNOWN"}]`;
+}
+
+function classifyPullRequest(pr) {
+  const checks = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes?.filter(Boolean) || [];
+  const mergeable = pr.mergeable || "UNKNOWN";
+  const hasConflict = mergeable === "CONFLICTING";
+  const base = {
+    repo: pr.repository.nameWithOwner,
+    number: pr.number,
+    numberLabel: `#${pr.number}`,
+    title: pr.title,
+    author: pr.author?.login || "unknown",
+    url: pr.url,
+    createdAt: pr.createdAt || "",
+    updatedAt: pr.updatedAt || "",
+    isArchived: Boolean(pr.repository.isArchived),
+    isDraft: Boolean(pr.isDraft),
+    mergeable,
+    hasConflict,
+    headSha: pr.headRefOid || "",
+    baseRefName: pr.baseRefName || "",
+    headRefName: pr.headRefName || "",
+    headRepo: pr.headRepository?.nameWithOwner || ""
+  };
+  if (!checks.length) {
+    return { ...base, state: "pass", checkCount: 0, runningChecks: [] };
+  }
+  if (checks.every(checkFinished)) {
+    const failure = failureReasonFromChecks(checks);
+    return {
+      ...base,
+      state: checks.some(checkFailed) ? "fail" : "pass",
+      checkCount: checks.length,
+      runningChecks: [],
+      failedChecks: failure.failedChecks,
+      failureReason: failure.failureReason
+    };
+  }
+  return {
+    ...base,
+    state: "running",
+    checkCount: checks.length,
+    runningChecks: [...new Set(checks.filter((check) => !checkFinished(check)).map(runningCheckLabel))]
+  };
+}
+
+async function fetchPrQuery(queryText, { ownerHint } = {}) {
+  const pullRequests = [];
+  let endCursor = null;
+  for (let page = 0; page < 50; page += 1) {
+    const json = await githubGraphql(PR_SEARCH_GRAPHQL, { q: queryText, endCursor }, { ownerHint });
+    const search = json?.data?.search;
+    if (!search) break;
+    pullRequests.push(
+      ...search.nodes
+        .filter((node) => node?.__typename === "PullRequest")
+        .map(classifyPullRequest)
+        .filter((pr) => !pr.isArchived)
+        .filter(Boolean)
+    );
+    if (!search.pageInfo?.hasNextPage) break;
+    endCursor = search.pageInfo.endCursor;
+  }
+  return pullRequests;
+}
+
+async function fetchPullRequestByNumber(repo, number) {
+  const { owner, name } = parseRepo(repo);
+  const json = await githubGraphql(PR_BY_NUMBER_GRAPHQL, { owner, name, number }, { ownerHint: owner });
+  const pr = json?.data?.repository?.pullRequest;
+  if (!pr) {
+    throw new HttpError(404, `Pull request ${repo}#${number} was not found.`);
+  }
+  return classifyPullRequest(pr);
+}
+
+async function getAccount() {
+  if (APP_AUTH_ENABLED) {
+    const installations = await discoverInstallations();
+    const first = installations.values().next().value;
+    if (!first) {
+      throw new Error("GitHub App has no installations. Install the app on at least one account.");
+    }
+    return first.accountLogin;
+  }
+  const user = await githubRequest("/user");
+  return user.login;
+}
+
+async function allOwners(me) {
+  return cachedGithubValue(`owners:${me}`, OWNER_REPOS_CACHE_TTL_MS, async () => {
+    if (APP_AUTH_ENABLED) {
+      const installations = await discoverInstallations();
+      return Array.from(installations.values()).map((inst) => inst.accountLogin);
+    }
+    const orgs = await githubRestAll("/user/orgs", (json) => (Array.isArray(json) ? json : []));
+    return [me, ...orgs.map((org) => org.login).filter(Boolean)];
+  });
+}
+
+async function selectedOwners(me, ownerFilter) {
+  const all = await allOwners(me);
+  if (!ownerFilter || !ownerFilter.length) return all;
+  const wanted = new Set(ownerFilter.map((value) => String(value).toLowerCase()));
+  return all.filter((owner) => wanted.has(owner.toLowerCase()));
+}
+
+function openPullRequestSearchQuery(qualifier, value) {
+  return `is:pr state:open archived:false ${qualifier}:${value}`;
+}
+
+async function fetchPullRequests({ mode, me, jobs, owners: ownerFilter }) {
+  const owners = await selectedOwners(me, ownerFilter);
+  const qualifier = mode === "mine" ? "author" : "owner";
+  const value = mode === "mine" || mode === "owned" ? me : null;
+  const groups = await mapLimit(owners, jobs, async (owner) => {
+    try {
+      const q = openPullRequestSearchQuery(qualifier, value || owner);
+      return await fetchPrQuery(q, { ownerHint: owner });
+    } catch {
+      return [];
+    }
+  });
+  const merged = uniqueBy(groups.flat(), (pr) => pr.url);
+  // When the user has explicitly scoped to specific owners, also drop PRs that
+  // happen to surface from a token's view of public repos outside that scope
+  // (e.g. mode=mine returns author:me PRs an installation can see across repos
+  // even if the repo owner is not in the App's installation set).
+  if (ownerFilter && ownerFilter.length) {
+    const allowed = new Set(owners.map((owner) => owner.toLowerCase()));
+    return merged.filter((pr) => allowed.has(String(pr.repo || "").split("/")[0].toLowerCase()));
+  }
+  return merged;
+}
+
+async function fetchOwnerRepos(owner, me) {
+  return cachedGithubValue(`owner-repos:${owner}:${me}`, OWNER_REPOS_CACHE_TTL_MS, async () => {
+    if (APP_AUTH_ENABLED) {
+      const installations = await discoverInstallations();
+      const installation = installations.get(owner.toLowerCase());
+      if (!installation) return [];
+      const repos = await githubRestAll(
+        "/installation/repositories",
+        (json) => json?.repositories || [],
+        100,
+        {},
+        owner
+      );
+      return repos
+        .filter((repo) => !repo.archived && repo.owner?.login?.toLowerCase() === owner.toLowerCase())
+        .map((repo) => repo.full_name);
+    }
+    if (owner === me) {
+      const repos = await githubRestAll("/user/repos", (json) => (Array.isArray(json) ? json : []), 100, {
+        affiliation: "owner"
+      });
+      return repos.filter((repo) => !repo.archived && repo.owner?.login === me).map((repo) => repo.full_name);
+    }
+    const repos = await githubRestAll(`/orgs/${owner}/repos`, (json) => (Array.isArray(json) ? json : []));
+    return repos.filter((repo) => !repo.archived).map((repo) => repo.full_name);
+  });
+}
+
+async function listRepos({ mode, me, pullRequests, jobs, owners: ownerFilter }) {
+  if (mode === "mine") return [...new Set(pullRequests.map((pr) => pr.repo))].sort();
+  if (mode === "owned") return fetchOwnerRepos(me, me);
+  const owners = await selectedOwners(me, ownerFilter);
+  const groups = await mapLimit(owners, jobs, async (owner) => {
+    try {
+      return await fetchOwnerRepos(owner, me);
+    } catch {
+      return [];
+    }
+  });
+  return [...new Set(groups.flat())].sort();
+}
+
+function isCdWorkflow(workflow) {
+  return CD_WORKFLOW_PATTERN.test(workflow.name || "") || CD_WORKFLOW_PATTERN.test(workflow.path || "");
+}
+
+function isCdWorkflowRun(run) {
+  return CD_WORKFLOW_PATTERN.test(run.name || "") || CD_WORKFLOW_PATTERN.test(run.path || "");
+}
+
+async function fetchCdWorkflows(repo) {
+  return cachedGithubValue(`cd-workflows:${repo}`, CD_WORKFLOW_CACHE_TTL_MS, async () => {
+    const workflows = await githubRestAll(`/repos/${repo}/actions/workflows`, (json) => json?.workflows || []);
+    return workflows.filter((workflow) => workflow.state === "active" && isCdWorkflow(workflow));
+  });
+}
+
+async function fetchWorkflowRuns(repo, workflowId, params) {
+  const cacheKey = `workflow-runs:${repo}:${workflowId}:${JSON.stringify(params || {})}`;
+  return cachedGithubValue(cacheKey, WORKFLOW_RUN_CACHE_TTL_MS, async () => {
+    const path = `/repos/${repo}/actions/workflows/${workflowId}/runs`;
+    const json = await githubRequest(path, { query: params });
+    return json?.workflow_runs || [];
+  });
+}
+
+async function fetchRecentDeploymentTargets(repo) {
+  return cachedGithubValue(`deployment-targets:${repo}`, DEPLOYMENT_TARGET_CACHE_TTL_MS, async () => {
+    const targets = new Map();
+    let deployments = [];
+    try {
+      deployments = await githubRestAll(`/repos/${repo}/deployments`, (json) => (Array.isArray(json) ? json : []), 20);
+    } catch {
+      return targets;
+    }
+
+    for (const deployment of deployments.slice(0, 20)) {
+      if (!deployment.statuses_url || targets.has(deployment.ref)) continue;
+      try {
+        const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
+        const latest = Array.isArray(statuses) ? statuses[0] : null;
+        const url = latest?.target_url || latest?.environment_url || "";
+        if (latest && SUCCESSFUL_DEPLOYMENT_STATES.has(latest.state) && url) {
+          targets.set(deployment.ref || "", {
+            url,
+            environment: deployment.environment || latest.environment || ""
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return targets;
+  });
+}
+
+async function fetchRepoProductionTarget(repo) {
+  return cachedGithubValue(`production-target:${repo}`, PRODUCTION_TARGET_CACHE_TTL_MS, async () => {
+    let metadata = null;
+    try {
+      metadata = await githubRequest(`/repos/${repo}`);
+      const homepage = likelyProductionUrl(metadata?.homepage);
+      if (homepage) {
+        return {
+          url: homepage,
+          environment: "production",
+          source: "repository homepage"
+        };
+      }
+    } catch {}
+
+    const defaultBranch = metadata?.default_branch || "";
+    const codeTarget = await fetchRepoProductionTargetFromCode(repo, defaultBranch);
+    if (codeTarget.url) return codeTarget;
+    const scanTarget = await fetchRepoProductionTargetFromTree(repo, defaultBranch);
+    if (scanTarget.url) return scanTarget;
+    return {};
+  });
+}
+
+async function fetchRepoTextFile(repo, path, ref = "") {
+  try {
+    const json = await githubRequest(`/repos/${repo}/contents/${encodeURIComponent(path).replaceAll("%2F", "/")}`, {
+      query: { ref }
+    });
+    if (json?.type !== "file" || !json.content) return "";
+    if (json.encoding === "base64") {
+      return Buffer.from(json.content.replace(/\s/g, ""), "base64").toString("utf8");
+    }
+    return String(json.content || "");
+  } catch {
+    return "";
+  }
+}
+
+function productionUrlFromPackageJson(text) {
+  try {
+    const pkg = JSON.parse(text);
+    return firstProductionUrl([
+      pkg.homepage,
+      pkg.config?.homepage,
+      pkg.config?.site,
+      pkg.config?.url,
+      pkg.site,
+      pkg.url
+    ]);
+  } catch {
+    return "";
+  }
+}
+
+function productionUrlFromCname(text) {
+  const line = String(text || "").split(/\r?\n/).map((item) => item.trim()).find(Boolean);
+  return line ? likelyProductionUrl(line) : "";
+}
+
+// Pure precedence: package.json homepage, then CNAME files, then framework
+// config files (in PRODUCTION_TARGET_CODE_FILES order). `files` maps each known
+// path to its already-fetched text. Kept side-effect-free so it is unit-testable.
+function productionTargetFromCodeFiles(files = {}) {
+  const packageUrl = productionUrlFromPackageJson(files["package.json"]);
+  if (packageUrl) {
+    return { url: packageUrl, environment: "production", source: "package.json homepage" };
+  }
+
+  for (const cnamePath of ["public/CNAME", "CNAME"]) {
+    const cname = productionUrlFromCname(files[cnamePath]);
+    if (cname) {
+      return { url: cname, environment: "production", source: cnamePath };
+    }
+  }
+
+  for (const path of PRODUCTION_TARGET_CODE_FILES) {
+    if (path === "package.json" || path === "public/CNAME" || path === "CNAME") continue;
+    const url = firstProductionUrl(extractProductionUrlsFromText(files[path] || ""));
+    if (url) {
+      return { url, environment: "production", source: path };
+    }
+  }
+
+  return {};
+}
+
+function buildProductionTargetCodeQuery() {
+  const params = PRODUCTION_TARGET_CODE_FILES.map((_, index) => `$e${index}: String!`).join(", ");
+  const fields = PRODUCTION_TARGET_CODE_FILES
+    .map((_, index) => `f${index}: object(expression: $e${index}) { ... on Blob { text } }`)
+    .join("\n      ");
+  return `query ProductionTargetFiles($owner: String!, $name: String!, ${params}) {
+    repository(owner: $owner, name: $name) {
+      ${fields}
+    }
+  }`;
+}
+
+// One batched GraphQL request fetches every PRODUCTION_TARGET_CODE_FILES blob at
+// once (on the generous graphql budget) instead of up to 14 sequential REST
+// `contents` reads on the scarce core budget. Falls back to per-file REST reads
+// if the batch query fails for any reason.
+async function fetchRepoProductionTargetFromCode(repo, ref = "") {
+  let owner;
+  let name;
+  try {
+    ({ owner, name } = parseRepo(repo));
+  } catch {
+    return {};
+  }
+  const expressionRef = ref || "HEAD";
+  try {
+    const variables = { owner, name };
+    PRODUCTION_TARGET_CODE_FILES.forEach((path, index) => {
+      variables[`e${index}`] = `${expressionRef}:${path}`;
+    });
+    const json = await githubGraphql(buildProductionTargetCodeQuery(), variables, { ownerHint: owner });
+    const repository = json?.data?.repository;
+    if (repository) {
+      const files = {};
+      PRODUCTION_TARGET_CODE_FILES.forEach((path, index) => {
+        files[path] = repository[`f${index}`]?.text || "";
+      });
+      return productionTargetFromCodeFiles(files);
+    }
+  } catch {
+    return fetchRepoProductionTargetFromCodeViaRest(repo, ref);
+  }
+  return {};
+}
+
+async function fetchRepoProductionTargetFromCodeViaRest(repo, ref = "") {
+  const files = {};
+  for (const path of PRODUCTION_TARGET_CODE_FILES) {
+    files[path] = await fetchRepoTextFile(repo, path, ref);
+    // Preserve the original early-exit: stop reading once a higher-priority
+    // file already yields a target.
+    const found = productionTargetFromCodeFiles(files);
+    if (found.url) return found;
+  }
+  return productionTargetFromCodeFiles(files);
+}
+
+function isProductionTargetScanPath(path) {
+  const normalized = String(path || "").toLowerCase();
+  if (!normalized || normalized.includes("node_modules/") || normalized.includes("dist/") || normalized.includes("build/")) return false;
+  if (normalized.includes(".git/") || normalized.includes("coverage/") || normalized.includes("__snapshots__/")) return false;
+  if (/(^|\/)(readme|deploy|deployment|production|prod|env|domain|domains|site|config|settings|constants|outputs|cloudfront|route53|serverless|sst|amplify|vercel|netlify|terraform|cdk|stack|stacks|infra|infrastructure)([-_.][^/]*)?\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(path)) {
+    return true;
+  }
+  if (/(^|\/)(package\.json|cname|\.env\.example|\.env\.production|\.env\.production\.example|vercel\.json|netlify\.toml|serverless\.ya?ml|sst\.config\.(js|ts)|amplify\.ya?ml)$/i.test(path)) {
+    return true;
+  }
+  if (/^(infra|infrastructure|cdk|stacks?|lib|config|deploy|deployment|scripts|\.github\/workflows)\//i.test(path) && /\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(path)) {
+    return true;
+  }
+  return false;
+}
+
+async function fetchRepoTree(repo, ref = "") {
+  const treeRef = ref || "HEAD";
+  try {
+    const json = await githubRequest(`/repos/${repo}/git/trees/${encodeURIComponent(treeRef)}`, {
+      query: { recursive: "1" }
+    });
+    return Array.isArray(json?.tree) ? json.tree : [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRepoProductionTargetFromTree(repo, ref = "") {
+  const tree = await fetchRepoTree(repo, ref);
+  const candidates = [];
+  const files = tree
+    .filter((item) => item.type === "blob" && isProductionTargetScanPath(item.path))
+    .filter((item) => !item.size || item.size <= PRODUCTION_TARGET_MAX_FILE_BYTES)
+    .sort((a, b) => a.path.length - b.path.length)
+    .slice(0, PRODUCTION_TARGET_SCAN_LIMIT);
+
+  for (const file of files) {
+    const text = await fetchRepoTextFile(repo, file.path, ref);
+    for (const url of extractProductionUrlsFromText(text)) {
+      candidates.push({ url, source: file.path });
+    }
+    if (file.path.toLowerCase().endsWith("cname")) {
+      const cname = productionUrlFromCname(text);
+      if (cname) candidates.push({ url: cname, source: file.path });
+    }
+  }
+
+  const best = bestProductionUrlCandidate(candidates, repo);
+  return best
+    ? {
+        url: best.url,
+        environment: "production",
+        source: best.source
+      }
+    : {};
+}
+
+async function fetchPullRequestFiles(repo, number) {
+  return cachedGithubValue(`pr-files:${repo}:${number}`, MERGED_PR_CACHE_TTL_MS, async () => {
+    try {
+      const files = await githubRestPage(`/repos/${repo}/pulls/${number}/files`, 1, 100);
+      return Array.isArray(files) ? files : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+async function fetchMergedPullRequestsFromList(repo) {
+  const pulls = await githubRestPage(`/repos/${repo}/pulls`, 1, 100, {
+    state: "closed",
+    sort: "updated",
+    direction: "desc"
+  });
+  return (Array.isArray(pulls) ? pulls : [])
+    .filter((pr) => pr.merged_at)
+    .sort((a, b) => String(b.merged_at || "").localeCompare(String(a.merged_at || "")))
+    .slice(0, MERGED_PR_SUMMARY_LIMIT);
+}
+
+async function fetchRecentMergedPullRequests(repo) {
+  return cachedGithubValue(`merged-prs:${repo}`, MERGED_PR_CACHE_TTL_MS, async () => {
+    try {
+      // List-only: the 100 most-recently-updated closed PRs reliably cover the
+      // "recent merged" window. We deliberately avoid the REST /search/issues
+      // fallback here — it draws on the scarce 30/min Search secondary limit and
+      // would pause the whole dashboard for marginal coverage of stale merges.
+      const merged = await fetchMergedPullRequestsFromList(repo);
+      return mapLimit(merged, 4, async (pr, index) => ({
+        pr,
+        files: index < MERGED_PR_FILE_DETAIL_FETCH_LIMIT ? await fetchPullRequestFiles(repo, pr.number) : []
+      }));
+    } catch {
+      return [];
+    }
+  });
+}
+
+function compactSha(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeMergedPullRequest(repo, item) {
+  const pr = item?.pr || item || {};
+  return {
+    repo,
+    number: pr.number,
+    numberLabel: `#${pr.number}`,
+    title: pr.title || "",
+    author: pr.user?.login || pr.author?.login || "unknown",
+    url: pr.html_url || pr.url || "",
+    mergedAt: pr.merged_at || pr.closed_at || "",
+    closedAt: pr.closed_at || "",
+    headSha: pr.head?.sha || pr.headSha || "",
+    mergeCommitSha: pr.merge_commit_sha || pr.mergeCommitSha || "",
+    baseRefName: pr.base?.ref || pr.baseRefName || "",
+    files: Array.isArray(item?.files) ? item.files : []
+  };
+}
+
+function traceStage(key, label, status, at = "", url = "") {
+  return { key, label, status, at, url };
+}
+
+function traceEvidence(type, label, url = "", at = "") {
+  return { type, label, url, at };
+}
+
+function traceAgeMs(value, now) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) ? now - time : 0;
+}
+
+function runHappenedAfter(run, isoDate) {
+  const runTime = new Date(run?.createdAt || run?.updatedAt || 0).getTime();
+  const baseTime = new Date(isoDate || 0).getTime();
+  if (!Number.isFinite(runTime) || !Number.isFinite(baseTime)) return false;
+  return runTime >= baseTime - 60 * 1000;
+}
+
+function cdRunMatchesPr(run, pr) {
+  if (!run || !pr) return false;
+  const runSha = compactSha(run.headSha);
+  const candidateShas = [pr.headSha, pr.mergeCommitSha].map(compactSha).filter(Boolean);
+  if (runSha && candidateShas.includes(runSha)) return true;
+  const branch = String(run.branch || "").toLowerCase();
+  const base = String(pr.baseRefName || "").toLowerCase();
+  return Boolean(branch && base && branch === base && runHappenedAfter(run, pr.mergedAt));
+}
+
+function traceStatusRank(status) {
+  return { flagged: 0, active: 1, unknown: 2, completed: 3 }[status] ?? 4;
+}
+
+function sortTraces(a, b) {
+  return traceStatusRank(a.status) - traceStatusRank(b.status) ||
+    String(b.lastEvidenceAt || b.startedAt || "").localeCompare(String(a.lastEvidenceAt || a.startedAt || "")) ||
+    String(a.repo || "").localeCompare(String(b.repo || "")) ||
+    Number(a.prNumber || 0) - Number(b.prNumber || 0);
+}
+
+function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
+  const startedAt = pr.createdAt || pr.updatedAt || new Date(now).toISOString();
+  const baseStages = [
+    traceStage("pr_opened", "PR opened", "complete", startedAt, pr.url),
+    traceStage("ci_complete", "CI complete", "pending"),
+    traceStage("merged", "Merged", "pending"),
+    traceStage("cd_started", "CD started", "pending"),
+    traceStage("prod_complete", "Production complete", "pending")
+  ];
+  const base = {
+    id: `${pr.repo}#${pr.number}`,
+    repo: pr.repo,
+    prNumber: pr.number,
+    numberLabel: pr.numberLabel,
+    title: pr.title,
+    author: pr.author,
+    prUrl: pr.url,
+    headSha: pr.headSha || "",
+    mergeCommitSha: "",
+    baseRef: pr.baseRefName || "",
+    startedAt,
+    lastEvidenceAt: pr.updatedAt || startedAt,
+    nextAction: { label: "Open PR", url: pr.url },
+    evidence: [traceEvidence("pull_request", `${pr.numberLabel} opened`, pr.url, startedAt)],
+    rule: { source: "auto", maxStageAgeMinutes: TRACE_CI_SLA_MS / 60000 },
+    stages: baseStages
+  };
+
+  if (pr.hasConflict) {
+    return {
+      ...base,
+      stage: "merged",
+      status: "flagged",
+      severity: "high",
+      reason: "Pull request has merge conflicts before it can continue toward production.",
+      stages: baseStages.map((stage) => stage.key === "merged" ? { ...stage, status: "blocked" } : stage)
+    };
+  }
+  if (pr.state === "fail") {
+    return {
+      ...base,
+      stage: "ci_complete",
+      status: "flagged",
+      severity: "critical",
+      reason: pr.failureReason || "CI failed before this PR could continue toward production.",
+      stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: "blocked" } : stage)
+    };
+  }
+  if (pr.state === "running") {
+    const stale = traceAgeMs(pr.updatedAt || startedAt, now) > TRACE_CI_SLA_MS;
+    return {
+      ...base,
+      stage: "ci_complete",
+      status: stale ? "flagged" : "active",
+      severity: stale ? "medium" : "low",
+      reason: stale ? "CI is still running past the expected window." : "CI is still running.",
+      stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: stale ? "blocked" : "active" } : stage)
+    };
+  }
+  return {
+    ...base,
+    stage: "merged",
+    status: "active",
+    severity: "low",
+    reason: "PR is ready, but has not merged and reached production yet.",
+    stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: "complete" } : stage)
+  };
+}
+
+// Files whose changes never alter what production serves. A merged PR that only
+// touches these does not trigger (and does not need) a production CD run, so it
+// should not be flagged for "no matching production CD run". Matched on the
+// basename so the path/directory does not matter (e.g. docs/CHANGELOG.md).
+function isDeployNeutralFile(filename) {
+  const path = String(filename || "").replaceAll("\\", "/").trim().toLowerCase();
+  if (!path) return false;
+  const base = path.split("/").pop();
+  // Release notes and repo metadata: CHANGELOG.md, HISTORY, AUTHORS, LICENSE, etc.
+  // Only a documentation/plain-text extension (or none) counts, so a code file
+  // that happens to share the name (e.g. changelog.css) is not treated as neutral.
+  if (/^(changelog|changes|history|releases?|release[-_.]?notes|readme|authors|contributors|codeowners|license|licence|copying|notice|contributing|code[-_]of[-_]conduct|security|support|funding)(\.(md|markdown|mdx|txt|rst|adoc))?$/.test(base)) {
+    return true;
+  }
+  // Dotfiles that only affect tooling/repo hygiene, never the deployed app.
+  if (/^\.(gitignore|gitattributes|editorconfig|npmignore|nvmrc|prettierignore|prettierrc|gitkeep)$/.test(base)) {
+    return true;
+  }
+  return false;
+}
+
+// True only when we have the changed-file list AND every changed file is
+// deploy-neutral. Returns false when files are unknown (empty) so we never
+// suppress a flag without positive evidence the PR could not have deployed.
+function mergedPrIsDeployNeutral(files = []) {
+  if (!Array.isArray(files) || files.length === 0) return false;
+  return files.every((file) => isDeployNeutralFile(file?.filename || file?.path || ""));
+}
+
+function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd = true } = {}) {
+  const startedAt = pr.mergedAt || pr.closedAt || new Date(now).toISOString();
+  const matching = cdRows.filter((run) => cdRunMatchesPr(run, pr)).sort(sortByCreatedDesc);
+  const failures = matching.filter((run) => run.outcome === "failure" || FAILED_RUN_CONCLUSIONS.has(run.conclusion));
+  const skipped = matching.filter((run) => run.outcome === "skipped");
+  const successes = matching.filter((run) => run.outcome === "success");
+  const running = matching.filter((run) => RUNNING_RUN_STATUSES.has(run.status));
+  const latest = matching[0] || null;
+  const evidence = [
+    traceEvidence("pull_request", `${pr.numberLabel} merged`, pr.url, startedAt),
+    ...matching.slice(0, 4).map((run) => traceEvidence("workflow_run", `${run.workflow} ${run.runNumber}`, run.url, run.createdAt))
+  ];
+  const stages = [
+    traceStage("pr_opened", "PR opened", "complete", "", pr.url),
+    traceStage("ci_complete", "CI complete", "complete"),
+    traceStage("merged", "Merged", "complete", startedAt, pr.url),
+    traceStage("cd_started", "CD started", matching.length ? "complete" : "missing", latest?.createdAt || "", latest?.url || ""),
+    traceStage("prod_complete", "Production complete", "missing")
+  ];
+  const base = {
+    id: `${pr.repo}#${pr.number}`,
+    repo: pr.repo,
+    prNumber: pr.number,
+    numberLabel: pr.numberLabel,
+    title: pr.title,
+    author: pr.author,
+    prUrl: pr.url,
+    headSha: pr.headSha || "",
+    mergeCommitSha: pr.mergeCommitSha || "",
+    baseRef: pr.baseRefName || "",
+    startedAt,
+    lastEvidenceAt: latest?.updatedAt || latest?.createdAt || startedAt,
+    evidence,
+    rule: {
+      source: "auto",
+      productionEnvironmentPattern: "prod|production",
+      cdWorkflowPattern: CD_WORKFLOW_PATTERN.source,
+      maxStageAgeMinutes: TRACE_PROD_COMPLETE_SLA_MS / 60000
+    }
+  };
+
+  // A PR that only touches changelog/docs/repo-metadata never deploys, so the
+  // absence of a production CD run is expected rather than a problem to flag.
+  const deployNeutral = mergedPrIsDeployNeutral(pr.files);
+
+  if (!includeCd) {
+    return {
+      ...base,
+      stage: "prod_complete",
+      status: "unknown",
+      severity: "low",
+      reason: "CD audit is off, so production completion cannot be verified.",
+      nextAction: { label: "Turn on CD audit", url: "" },
+      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "unknown" } : stage)
+    };
+  }
+
+  if (successes.length) {
+    const success = successes[0];
+    return {
+      ...base,
+      stage: "prod_complete",
+      status: "completed",
+      severity: "low",
+      reason: "Production CD completed successfully.",
+      nextAction: { label: "Open deploy run", url: success.url },
+      lastEvidenceAt: success.updatedAt || success.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "complete", at: success.createdAt, url: success.url } : stage)
+    };
+  }
+
+  if (failures.length) {
+    const failed = failures[0];
+    return {
+      ...base,
+      stage: "prod_complete",
+      status: "flagged",
+      severity: "critical",
+      reason: failed.failureReason || "Production CD failed after this PR merged.",
+      nextAction: { label: "Open failed run", url: failed.url },
+      lastEvidenceAt: failed.updatedAt || failed.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "blocked", at: failed.createdAt, url: failed.url } : stage)
+    };
+  }
+
+  if (skipped.length) {
+    const skip = skipped[0];
+    if (deployNeutral) {
+      return {
+        ...base,
+        stage: "prod_complete",
+        status: "completed",
+        severity: "low",
+        reason: "CD skipped as expected — this PR only changes changelog/docs, so production was not updated.",
+        nextAction: { label: "Open skipped run", url: skip.url },
+        lastEvidenceAt: skip.updatedAt || skip.createdAt || base.lastEvidenceAt,
+        stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "skipped", at: skip.createdAt, url: skip.url } : stage)
+      };
+    }
+    return {
+      ...base,
+      stage: "prod_complete",
+      status: "flagged",
+      severity: "high",
+      reason: skip.skipReason || "CD was skipped; production was not updated.",
+      nextAction: { label: "Open skipped run", url: skip.url },
+      lastEvidenceAt: skip.updatedAt || skip.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "blocked", at: skip.createdAt, url: skip.url } : stage)
+    };
+  }
+
+  if (running.length) {
+    const run = running[0];
+    const stale = traceAgeMs(run.createdAt, now) > TRACE_PROD_COMPLETE_SLA_MS;
+    return {
+      ...base,
+      stage: "prod_complete",
+      status: stale ? "flagged" : "active",
+      severity: stale ? "medium" : "low",
+      reason: stale ? "CD is still running past the expected production window." : "CD is running and has not completed production yet.",
+      nextAction: { label: "Open deploy run", url: run.url },
+      lastEvidenceAt: run.updatedAt || run.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: stale ? "blocked" : "active", at: run.createdAt, url: run.url } : stage)
+    };
+  }
+
+  const hasAnyCdEvidence = cdRows.length > 0;
+  if (!hasAnyCdEvidence) {
+    return {
+      ...base,
+      stage: "cd_started",
+      status: "unknown",
+      severity: "low",
+      reason: "No production workflow or deployment environment was detected for this repository.",
+      nextAction: { label: "Open PR", url: pr.url },
+      stages: stages.map((stage) => stage.key === "cd_started" || stage.key === "prod_complete" ? { ...stage, status: "unknown" } : stage)
+    };
+  }
+
+  if (deployNeutral) {
+    return {
+      ...base,
+      stage: "cd_started",
+      status: "completed",
+      severity: "low",
+      reason: "No production deploy expected — this PR only changes changelog/docs, which does not run CD.",
+      nextAction: { label: "Open PR", url: pr.url },
+      stages: stages.map((stage) => stage.key === "cd_started" || stage.key === "prod_complete" ? { ...stage, status: "skipped" } : stage)
+    };
+  }
+
+  const overdue = traceAgeMs(startedAt, now) > TRACE_CD_START_SLA_MS;
+  return {
+    ...base,
+    stage: "cd_started",
+    status: overdue ? "flagged" : "active",
+    severity: overdue ? "high" : "low",
+    reason: overdue ? "Merged PR has no matching production CD run yet." : "Waiting for a matching production CD run to start.",
+    nextAction: { label: "Open PR", url: pr.url },
+    stages: stages.map((stage) => stage.key === "cd_started" ? { ...stage, status: overdue ? "blocked" : "active" } : stage)
+  };
+}
+
+function groupTraces(traces) {
+  const sorted = [...traces].sort(sortTraces);
+  return {
+    flagged: sorted.filter((trace) => trace.status === "flagged"),
+    active: sorted.filter((trace) => trace.status === "active"),
+    completed: sorted.filter((trace) => trace.status === "completed"),
+    unknown: sorted.filter((trace) => trace.status === "unknown")
+  };
+}
+
+function buildPipelineTraces({ pullRequests = [], mergedPullRequestsByRepo = new Map(), cdRowsByRepo = new Map(), includeCd = true, now = Date.now() } = {}) {
+  const traces = [];
+  const seen = new Set();
+  for (const pr of pullRequests) {
+    const trace = buildOpenPullRequestTrace(pr, { now });
+    traces.push(trace);
+    seen.add(trace.id);
+  }
+  for (const [repo, items] of mergedPullRequestsByRepo.entries()) {
+    for (const item of items || []) {
+      const pr = normalizeMergedPullRequest(repo, item);
+      if (!pr.number || seen.has(`${repo}#${pr.number}`)) continue;
+      const cdRows = cdRowsByRepo.get(repo) || [];
+      traces.push(buildMergedPullRequestTrace(pr, cdRows, { now, includeCd }));
+      seen.add(`${repo}#${pr.number}`);
+    }
+  }
+  return groupTraces(traces);
+}
+
+async function fetchRecentCommits(repo, branch = "") {
+  return cachedGithubValue(`recent-commits:${repo}:${branch || "default"}`, RECENT_COMMIT_CACHE_TTL_MS, async () => {
+    try {
+      const commits = await githubRestPage(`/repos/${repo}/commits`, 1, MERGED_PR_SUMMARY_LIMIT, {
+        sha: branch || undefined
+      });
+      const recent = Array.isArray(commits) ? commits.slice(0, MERGED_PR_SUMMARY_LIMIT) : [];
+      return mapLimit(recent, 4, async (commit) => {
+        try {
+          return await githubRequest(`/repos/${repo}/commits/${commit.sha}`);
+        } catch {
+          return commit;
+        }
+      });
+    } catch {
+      return [];
+    }
+  });
+}
+
+async function fetchCdForRepo(repo) {
+  const failed = [];
+  const finished = [];
+  const running = [];
+  const failureReasons = new Map();
+  const changeSummaries = new Map();
+  let deploymentTargetsPromise = null;
+  let repoProductionTargetPromise = null;
+  let mergedPullRequestsPromise = null;
+  let recentCommitsPromise = null;
+  let workflows = [];
+  try {
+    workflows = await fetchCdWorkflows(repo);
+  } catch {
+  return {
+    failed: markIgnoredRuns(failed),
+    finished,
+    running: markIgnoredRuns(running)
+  };
+  }
+  for (const workflow of workflows) {
+    try {
+      const recentWorkflowRuns = await fetchWorkflowRuns(repo, workflow.id, { per_page: 20 });
+      const completedRuns = recentWorkflowRuns.filter((run) => run.status === "completed");
+      for (const failedRun of selectFailedCdRuns(completedRuns)) {
+        const failedAt = failedRun.updated_at || failedRun.created_at;
+        const failureReason = await fetchWorkflowRunFailureReason(repo, failedRun);
+        failureReasons.set(failedRun.id, failureReason);
+        const supersedingRun = findSupersedingSuccessfulRun(completedRuns, failedRun);
+        const resolvedBy = supersedingRun
+          ? {
+              runNumber: `#${supersedingRun.run_number}`,
+              url: supersedingRun.html_url || "",
+              conclusion: supersedingRun.conclusion || "",
+              createdAt: supersedingRun.updated_at || supersedingRun.created_at || ""
+            }
+          : null;
+        failed.push({
+          runId: failedRun.id || null,
+          createdAt: failedAt,
+          updatedAt: failedRun.updated_at || "",
+          repo,
+          workflow: workflow.name,
+          runNumber: `#${failedRun.run_number}`,
+          status: failedRun.status || "",
+          conclusion: failedRun.conclusion || "",
+          failureReason,
+          branch: failedRun.head_branch || "",
+          headSha: failedRun.head_sha || failedRun.head_commit?.id || "",
+          title: failedRun.display_title || "",
+          url: failedRun.html_url || "",
+          resolvedBy
+        });
+      }
+      for (const [runIndex, run] of completedRuns.entries()) {
+        const finishedAt = run.updated_at || run.created_at;
+        if (!isWithinFinishedCdWindow(finishedAt)) continue;
+        const outcome = runOutcome(run);
+        const failureReason = FAILED_RUN_CONCLUSIONS.has(run.conclusion)
+          ? failureReasons.get(run.id) || await fetchWorkflowRunFailureReason(repo, run)
+          : "";
+        if (failureReason) failureReasons.set(run.id, failureReason);
+        const skipReason = outcome === "skipped"
+          ? await fetchWorkflowRunSkipReason(repo, run)
+          : "";
+        deploymentTargetsPromise ||= fetchRecentDeploymentTargets(repo);
+        const deploymentTargets = await deploymentTargetsPromise;
+        let deployTarget = deploymentTargets.get(run.head_branch || "") || deploymentTargets.get("") || {};
+        if (!deployTarget.url) {
+          repoProductionTargetPromise ||= fetchRepoProductionTarget(repo);
+          deployTarget = await repoProductionTargetPromise || {};
+        }
+        const changeKey = run.head_sha || run.head_commit?.id || run.id;
+        if (!changeSummaries.has(changeKey)) {
+          mergedPullRequestsPromise ||= fetchRecentMergedPullRequests(repo);
+          const mergedPullRequests = await mergedPullRequestsPromise;
+          let recentCommits = [];
+          if (!mergedPullRequests.length) {
+            recentCommitsPromise ||= fetchRecentCommits(repo, run.head_branch || "");
+            recentCommits = await recentCommitsPromise;
+          }
+          const previousRun = completedRuns.slice(runIndex + 1).find((item) => item.head_sha || item.head_commit?.id);
+          changeSummaries.set(
+            changeKey,
+            await fetchWorkflowRunChangeSummary(repo, run, deployTarget, previousRun, mergedPullRequests, recentCommits)
+          );
+        }
+        finished.push({
+          runId: run.id || null,
+          createdAt: finishedAt,
+          updatedAt: run.updated_at || "",
+          repo,
+          workflow: workflow.name,
+          runNumber: `#${run.run_number}`,
+          status: run.status || "",
+          conclusion: run.conclusion || "",
+          outcome,
+          failureReason,
+          skipReason,
+          branch: run.head_branch || "",
+          headSha: run.head_sha || run.head_commit?.id || "",
+          title: run.display_title || "",
+          url: run.html_url || "",
+          changeSummary: changeSummaries.get(changeKey)
+        });
+      }
+
+      for (const run of recentWorkflowRuns.filter((item) => RUNNING_RUN_STATUSES.has(item.status))) {
+        running.push({
+          runId: run.id || null,
+          createdAt: run.created_at,
+          updatedAt: run.updated_at || "",
+          repo,
+          workflow: workflow.name,
+          runNumber: `#${run.run_number}`,
+          status: run.status || "",
+          branch: run.head_branch || "",
+          headSha: run.head_sha || run.head_commit?.id || "",
+          title: run.display_title || "",
+          url: run.html_url || ""
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+  return { failed, finished, running };
+}
+
+async function fetchActionsForRepo(repo) {
+  return cachedGithubValue(`actions:${repo}`, RUNNING_ACTION_CACHE_TTL_MS, async () => {
+    try {
+      const json = await githubRequest(`/repos/${repo}/actions/runs`, { query: { per_page: 20 } });
+      const runs = json?.workflow_runs || [];
+      const running = runs
+        .filter((run) => RUNNING_RUN_STATUSES.has(run.status))
+        .filter((run) => !isCdWorkflowRun(run))
+        .map((run) => ({
+          kind: "workflowRun",
+          createdAt: run.created_at || "",
+          repo,
+          workflow: run.name || "Workflow",
+          runNumber: `#${run.run_number}`,
+          status: run.status || "",
+          branch: run.head_branch || "",
+          ...(run.head_sha || run.head_commit?.id ? { headSha: run.head_sha || run.head_commit?.id } : {}),
+          ...((run.pull_requests || []).some((item) => item.number)
+            ? { pullRequestNumbers: (run.pull_requests || []).map((item) => item.number).filter(Boolean) }
+            : {}),
+          title: run.display_title || run.name || "",
+          url: run.html_url || ""
+        }));
+      const failed = await mapLimit(selectFailedActionRuns(runs), 4, async (run) => ({
+        kind: "workflowRun",
+        createdAt: run.updated_at || run.created_at || "",
+        repo,
+        workflow: run.name || "Workflow",
+        runNumber: `#${run.run_number}`,
+        status: run.status || "",
+        conclusion: run.conclusion || "",
+        branch: run.head_branch || "",
+        ...(run.head_sha || run.head_commit?.id ? { headSha: run.head_sha || run.head_commit?.id } : {}),
+        ...((run.pull_requests || []).some((item) => item.number)
+          ? { pullRequestNumbers: (run.pull_requests || []).map((item) => item.number).filter(Boolean) }
+          : {}),
+        ...(isDependabotWorkflowRun(run) ? { dependabot: true } : {}),
+        title: run.display_title || run.name || "",
+        url: run.html_url || "",
+        failureReason: await fetchWorkflowRunFailureReason(repo, run)
+      }));
+      return {
+        failed: markIgnoredRuns(failed),
+        running: markIgnoredRuns(running)
+      };
+    } catch {
+      return { failed: [], running: [] };
+    }
+  });
+}
+
+function workflowRunMatchesPullRequest(run, pr) {
+  if (!run || !pr || run.repo !== pr.repo) return false;
+  if ((run.pullRequestNumbers || []).includes(pr.number)) return true;
+  if (run.headSha && pr.headSha && run.headSha === pr.headSha) return true;
+  return false;
+}
+
+function applyActionRunEvidenceToPullRequests(pullRequests, { runningActions = [], failedActions = [] } = {}) {
+  if (!runningActions.length && !failedActions.length) return pullRequests;
+  return pullRequests.map((pr) => {
+    if (pr.hasConflict) return pr;
+    const running = runningActions.filter((run) => workflowRunMatchesPullRequest(run, pr));
+    const failed = failedActions.filter((run) => workflowRunMatchesPullRequest(run, pr));
+    if (running.length) {
+      return {
+        ...pr,
+        state: "running",
+        checkCount: Math.max(pr.checkCount || 0, running.length),
+        runningChecks: running.map((run) => `${run.workflow} ${run.runNumber} [${run.status || "RUNNING"}]`)
+      };
+    }
+    if (failed.length && pr.state === "pass" && pr.checkCount === 0) {
+      return {
+        ...pr,
+        state: "fail",
+        checkCount: Math.max(pr.checkCount || 0, failed.length),
+        failedChecks: failed.map((run) => `${run.workflow} ${run.runNumber}`),
+        failureReason: failed.map((run) => failureDetailFromRun(run)).filter(Boolean).join(", ") || "CI failed"
+      };
+    }
+    return pr;
+  });
+}
+
+function failureDetailFromRun(run) {
+  const conclusion = run?.conclusion ? FAILURE_REASON_LABELS[run.conclusion] || run.conclusion : "";
+  const title = [run?.workflow, run?.runNumber].filter(Boolean).join(" ");
+  return [title, conclusion].filter(Boolean).join(" ");
+}
+
+async function fetchRunningDeploymentsForRepo(repo) {
+  return cachedGithubValue(`running-deployments:${repo}`, RUNNING_DEPLOYMENT_CACHE_TTL_MS, async () => {
+    const running = [];
+    let deployments = [];
+    try {
+      deployments = await githubRestAll(`/repos/${repo}/deployments`, (json) => (Array.isArray(json) ? json : []), 20);
+    } catch {
+      return running;
+    }
+    for (const deployment of deployments.slice(0, 20)) {
+      if (!deployment.statuses_url) continue;
+      try {
+        const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
+        const latest = Array.isArray(statuses) ? statuses[0] : null;
+        if (latest && RUNNING_DEPLOYMENT_STATES.has(latest.state)) {
+          running.push({
+            createdAt: latest.created_at || deployment.created_at || "",
+            repo,
+            environment: deployment.environment || "",
+            ref: deployment.ref || "",
+            state: latest.state || "",
+            task: deployment.task || "",
+            description: latest.description || "",
+            url: latest.target_url || latest.log_url || deployment.url || ""
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+    return running;
+  });
+}
+
+async function fetchBusyRepoRunners(repo) {
+  try {
+    const runners = await githubRestAll(`/repos/${repo}/actions/runners`, (json) => json?.runners || []);
+    return runners.filter((runner) => runner.busy).map((runner) => ({
+      level: "REPO",
+      scope: repo,
+      name: runner.name,
+      status: runner.status || "",
+      labels: (runner.labels || []).map((label) => label.name).filter(Boolean)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchBusyOrgRunners(owner) {
+  try {
+    const runners = await githubRestAll(`/orgs/${owner}/actions/runners`, (json) => json?.runners || []);
+    return runners.filter((runner) => runner.busy).map((runner) => ({
+      level: "ORG",
+      scope: owner,
+      name: runner.name,
+      status: runner.status || "",
+      labels: (runner.labels || []).map((label) => label.name).filter(Boolean)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners: ownerFilter }) {
+  const ownerSet = new Set();
+  for (const pr of pullRequests) ownerSet.add(pr.repo.split("/")[0]);
+  for (const repo of repos) ownerSet.add(repo.split("/")[0]);
+  if (mode === "all") {
+    for (const owner of await selectedOwners(me, ownerFilter)) ownerSet.add(owner);
+  }
+  if (mode === "owned") ownerSet.add(me);
+
+  const orgGroups = await mapLimit([...ownerSet].sort(), jobs, fetchBusyOrgRunners);
+  const repoGroups = includeRepoRunners
+    ? await mapLimit(repos, jobs, fetchBusyRepoRunners)
+    : [];
+  return uniqueBy([...orgGroups.flat(), ...repoGroups.flat()], (runner) =>
+    [runner.level, runner.scope, runner.name].join(":")
+  );
+}
+
+// The REST check-runs API reports lowercase `status`/`conclusion`; the GraphQL
+// checks used elsewhere report uppercase enums. Normalise before comparing.
+function hasFailedCiSignal(checkRuns, statuses) {
+  const failedCheckRun = (checkRuns || []).some((run) =>
+    String(run?.status || "").toUpperCase() === "COMPLETED" &&
+    FAILED_CHECK_CONCLUSIONS.has(String(run?.conclusion || "").toUpperCase())
+  );
+  return failedCheckRun ||
+    (statuses || []).some((status) => FAILED_CHECK_CONCLUSIONS.has(String(status?.state || "").toUpperCase()));
+}
+
+async function fetchDependabotWorkloadForRepo(repo, { includeRuns = true } = {}) {
+  const errors = [];
+  const pullRequests = await githubRestAllWithinQuota(
+    `/repos/${repo}/pulls`,
+    (json) => (Array.isArray(json) ? json : []),
+    100,
+    { state: "open" }
+  ).catch((error) => {
+    errors.push(`${repo} pull requests: ${error.message}`);
+    return [];
+  });
+
+  const dependabotPrs = pullRequests.filter((pr) => isDependabotLogin(pr.user?.login));
+  const failingPrs = [];
+
+  for (const pr of dependabotPrs) {
+    const headSha = pr.head?.sha;
+    // Without a head SHA there is no CI evidence to judge; closing blind would
+    // discard passing updates, so leave the pull request alone.
+    if (!headSha) continue;
+    try {
+      const [checkRunsJson, statusJson] = await Promise.all([
+        githubRequest(`/repos/${repo}/commits/${headSha}/check-runs`).catch(() => null),
+        githubRequest(`/repos/${repo}/commits/${headSha}/status`).catch(() => null)
+      ]);
+
+      if (hasFailedCiSignal(checkRunsJson?.check_runs, statusJson?.statuses)) {
+        failingPrs.push({ repo, number: pr.number, title: pr.title || "", url: pr.html_url || "" });
+      }
+    } catch (error) {
+      errors.push(`${repo} PR #${pr.number} CI check status: ${error.message}`);
+    }
+  }
+
+  if (!includeRuns) return { pullRequests: failingPrs, runs: [], errors };
+
+  const runGroups = await mapLimit([...RUNNING_RUN_STATUSES], 2, async (status) => {
+    try {
+      return await githubRestAllWithinQuota(
+        `/repos/${repo}/actions/runs`,
+        (json) => json?.workflow_runs || [],
+        100,
+        { status }
+      );
+    } catch (error) {
+      errors.push(`${repo} ${status} runs: ${error.message}`);
+      return [];
+    }
+  });
+  return {
+    pullRequests: failingPrs,
+    runs: uniqueBy(runGroups.flat().filter(isDependabotWorkflowRun), (run) => run.id)
+      .map((run) => ({
+        repo,
+        runId: run.id,
+        workflow: run.name || "Workflow",
+        url: run.html_url || ""
+      })),
+    errors
+  };
+}
+
+async function cleanupDependabotWorkload({ repos, jobs = 4, cancelRuns = true }) {
+  const groups = await mapLimit(repos || [], jobs, (repo) =>
+    fetchDependabotWorkloadForRepo(repo, { includeRuns: cancelRuns })
+  );
+  const pullRequests = uniqueBy(groups.flatMap((group) => group.pullRequests), (pr) => `${pr.repo}#${pr.number}`);
+  const runs = uniqueBy(groups.flatMap((group) => group.runs), (run) => `${run.repo}:${run.runId}`);
+  const errors = groups.flatMap((group) => group.errors || []);
+  if (currentQuotaIsBlocked()) {
+    errors.push("GitHub API quota became too low before Dependabot mutations started.");
+    return { closedPullRequests: [], cancelledRuns: [], errors };
+  }
+
+  const cancelledRuns = (await mapLimit(runs, jobs, async (run) => {
+    try {
+      if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for cancellation.");
+      await githubRequest(`/repos/${run.repo}/actions/runs/${run.runId}/cancel`, { method: "POST" });
+      return run;
+    } catch (error) {
+      if (error.status !== 404 && error.status !== 409) {
+        errors.push(`${run.repo} run ${run.runId}: ${error.message}`);
+      }
+      return null;
+    }
+  })).filter(Boolean);
+
+  const closedPullRequests = (await mapLimit(pullRequests, jobs, async (pr) => {
+    try {
+      if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for pull request closure.");
+      const result = await githubRequest(`/repos/${pr.repo}/pulls/${pr.number}`, {
+        method: "PATCH",
+        body: { state: "closed" }
+      });
+      if (result?.state !== "closed") throw new Error("GitHub did not close the pull request");
+      autoMergeState.candidates.delete(autoMergeKey(pr.repo, pr.number));
+      return pr;
+    } catch (error) {
+      errors.push(`${pr.repo}#${pr.number}: ${error.message}`);
+      return null;
+    }
+  })).filter(Boolean);
+
+  for (const repo of repos || []) {
+    githubValueCache.delete(`actions:${repo}`);
+    for (const key of githubValueCache.keys()) {
+      if (key.startsWith(`workflow-runs:${repo}:`)) githubValueCache.delete(key);
+    }
+  }
+
+  return { closedPullRequests, cancelledRuns, errors };
+}
+
+function dependabotCleanupSnapshot() {
+  return {
+    enabled: DEPENDABOT_QUEUE_THRESHOLD > 0,
+    threshold: DEPENDABOT_QUEUE_THRESHOLD,
+    owners: DEPENDABOT_QUEUE_OWNERS,
+    queueDepth: dependabotCleanupState.queueDepth,
+    running: dependabotCleanupState.running,
+    lastScanAt: dependabotCleanupState.lastScanAt,
+    blockedUntil: dependabotCleanupState.blockedUntil
+      ? new Date(dependabotCleanupState.blockedUntil).toISOString()
+      : null,
+    lastCompletedAt: dependabotCleanupState.lastCompletedAt,
+    closedPullRequests: dependabotCleanupState.lastResult?.closedPullRequests.length || 0,
+    cancelledRuns: dependabotCleanupState.lastResult?.cancelledRuns.length || 0,
+    lastError: dependabotCleanupState.lastError
+  };
+}
+
+async function fetchQueuedRunsForRepo(repo, limit) {
+  const runs = [];
+  for (let page = 1; page <= 50; page += 1) {
+    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for queue discovery.");
+    const json = await githubRestPage(`/repos/${repo}/actions/runs`, page, 100, { status: "queued" });
+    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for queue discovery.");
+    const items = json?.workflow_runs || [];
+    runs.push(...items);
+    if (items.length < 100 || runs.length >= limit) break;
+  }
+  return runs.map((run) => ({ repo, runId: run.id || null, status: run.status || "", url: run.html_url || "" }));
+}
+
+async function runDependabotQueueScan({
+  threshold = DEPENDABOT_QUEUE_THRESHOLD,
+  owners = DEPENDABOT_QUEUE_OWNERS,
+  jobs = DEPENDABOT_CLEANUP_JOBS,
+  now = Date.now()
+} = {}) {
+  if (threshold <= 0 || dependabotCleanupState.running) return null;
+  if (now < dependabotCleanupState.blockedUntil) return null;
+  if (dependabotCleanupState.lastAttemptAt && now - dependabotCleanupState.lastAttemptAt < DEPENDABOT_CLEANUP_COOLDOWN_MS) {
+    return null;
+  }
+  const knownQuota = quotaState(snapshotRateLimit(createScanMetrics()));
+  const knownResetAt = new Date(knownQuota.resetAt || 0).getTime();
+  if (knownQuota.blocked && (!Number.isFinite(knownResetAt) || knownResetAt > now)) {
+    dependabotCleanupState.lastError = "Dependabot cleanup paused because GitHub API quota is low.";
+    dependabotCleanupState.blockedUntil = Number.isFinite(knownResetAt)
+      ? Math.max(now + DEPENDABOT_CLEANUP_COOLDOWN_MS, knownResetAt + 30 * 1000)
+      : now + DEPENDABOT_CLEANUP_COOLDOWN_MS;
+    return null;
+  }
+  dependabotCleanupState.running = true;
+  dependabotCleanupState.lastError = "";
+  try {
+    const metrics = createScanMetrics();
+    let repos = [];
+    let repositoryErrors = [];
+    let queuedGroups = [];
+    await scanMetrics.run(metrics, async () => {
+      const me = await getAccount();
+      const selected = await selectedOwners(me, owners);
+      if (owners.length && !selected.length) {
+        throw new Error("No DEPENDABOT_QUEUE_OWNERS matched an accessible GitHub owner.");
+      }
+      const repoGroups = await mapLimit(selected, jobs, async (owner) => {
+        try {
+          return { repos: await fetchOwnerRepos(owner, me), errors: [] };
+        } catch (error) {
+          return { repos: [], errors: [`${owner} repositories: ${error.message}`] };
+        }
+      });
+      repos = [...new Set(repoGroups.flatMap((group) => group.repos))].sort();
+      repositoryErrors = repoGroups.flatMap((group) => group.errors);
+      queuedGroups = await mapLimit(repos, jobs, async (repo) => {
+        try {
+          return { runs: await fetchQueuedRunsForRepo(repo, threshold), errors: [] };
+        } catch (error) {
+          return { runs: [], errors: [`${repo} queued runs: ${error.message}`] };
+        }
+      });
+    });
+    const queuedRuns = queuedGroups.flatMap((group) => group.runs);
+    const discoveryErrors = [...repositoryErrors, ...queuedGroups.flatMap((group) => group.errors)];
+    dependabotCleanupState.queueDepth = dependabotQueueDepth(queuedRuns);
+    dependabotCleanupState.lastScanAt = new Date(now).toISOString();
+    dependabotCleanupState.lastError = discoveryErrors.join("; ");
+    // Cancelling in-flight runs is the destructive half and stays gated on queue
+    // depth. Closing Dependabot PRs whose CI already failed is safe at any depth,
+    // so it runs on every pass — a lone failing PR should not wait for a backlog.
+    const cancelRuns = shouldCleanDependabotQueue(dependabotCleanupState.queueDepth, threshold);
+
+    const quota = quotaState(snapshotRateLimit(metrics));
+    if (quota.blocked) {
+      dependabotCleanupState.lastError = "Dependabot cleanup paused because GitHub API quota is low.";
+      const resetAt = new Date(quota.resetAt || 0).getTime();
+      dependabotCleanupState.blockedUntil = Number.isFinite(resetAt)
+        ? Math.max(now + DEPENDABOT_CLEANUP_COOLDOWN_MS, resetAt + 30 * 1000)
+        : now + DEPENDABOT_CLEANUP_COOLDOWN_MS;
+      return null;
+    }
+    dependabotCleanupState.lastAttemptAt = now;
+    const result = await cleanupDependabotWorkload({ repos, jobs, cancelRuns });
+    dependabotCleanupState.lastResult = result;
+    dependabotCleanupState.lastCompletedAt = new Date().toISOString();
+    dependabotCleanupState.lastError = [...discoveryErrors, ...result.errors].join("; ");
+    return result;
+  } catch (error) {
+    dependabotCleanupState.lastError = error.message || "Dependabot cleanup failed";
+    return null;
+  } finally {
+    dependabotCleanupState.running = false;
+  }
+}
+
+function clearDependabotQueueTimer() {
+  if (!dependabotCleanupState.timer) return;
+  clearTimeout(dependabotCleanupState.timer);
+  dependabotCleanupState.timer = null;
+}
+
+function scheduleDependabotQueueScan(delayMs = 0) {
+  if (DEPENDABOT_QUEUE_THRESHOLD <= 0 || dependabotCleanupState.timer) return;
+  dependabotCleanupState.timer = setTimeout(async () => {
+    dependabotCleanupState.timer = null;
+    await runDependabotQueueScan();
+    scheduleDependabotQueueScan(DEPENDABOT_QUEUE_SCAN_MS);
+  }, Math.max(0, delayMs));
+}
+
+function resetDependabotCleanupState() {
+  clearDependabotQueueTimer();
+  dependabotCleanupState.running = false;
+  dependabotCleanupState.queueDepth = 0;
+  dependabotCleanupState.lastAttemptAt = 0;
+  dependabotCleanupState.blockedUntil = 0;
+  dependabotCleanupState.lastScanAt = null;
+  dependabotCleanupState.lastCompletedAt = null;
+  dependabotCleanupState.lastResult = null;
+  dependabotCleanupState.lastError = "";
+}
+
+async function buildBusyRunnerData(requestUrl) {
+  const params = requestUrl.searchParams;
+  const mode = normalizeMode(params.get("mode"));
+  const jobs = parseJobs(params.get("jobs"));
+  const includeRepoRunners = parseBool(params.get("includeRepoRunners"), false);
+  const owners = parseOwners(params.get("owners"));
+  const me = await getAccount();
+  const pullRequests = await fetchPullRequests({ mode, me, jobs, owners });
+  const repos = includeRepoRunners ? await listRepos({ mode, me, pullRequests, jobs, owners }) : [];
+  const busyRunners = await fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners });
+  const sortedBusyRunners = busyRunners.sort((a, b) =>
+    `${a.level}/${a.scope}/${a.name}`.localeCompare(`${b.level}/${b.scope}/${b.name}`)
+  );
+  return {
+    account: me,
+    generatedAt: new Date().toISOString(),
+    options: { mode, jobs, includeRepoRunners, owners },
+    summary: {
+      busyRunners: sortedBusyRunners.length,
+      repos: repos.length || new Set(pullRequests.map((pr) => pr.repo)).size
+    },
+    runners: {
+      busy: sortedBusyRunners
+    },
+    rateLimit: snapshotRateLimit(scanMetrics.getStore() || createScanMetrics())
+  };
+}
+
+async function buildDashboardData(requestUrl) {
+  const params = requestUrl.searchParams;
+  const mode = normalizeMode(params.get("mode"));
+  const jobs = parseJobs(params.get("jobs"));
+  const includeCd = parseBool(params.get("includeCd"), true);
+  const includeTraces = parseBool(params.get("includeTraces"), false);
+  const includeRunners = parseBool(params.get("includeRunners"), false) || parseBool(params.get("includeRepoRunners"), false);
+  const includeRepoRunners = parseBool(params.get("includeRepoRunners"), false);
+  const owners = parseOwners(params.get("owners"));
+  const me = await getAccount();
+  let pullRequests = await fetchPullRequests({ mode, me, jobs, owners });
+  let repos = [];
+  let failedCd = [];
+  let finishedCd = [];
+  let runningCd = [];
+  let failedActions = [];
+  let runningActions = [];
+  let runningDeployments = [];
+  let busyRunners = [];
+  let traces = groupTraces([]);
+  let cdRowsByRepo = new Map();
+  let mergedPullRequestsByRepo;
+
+  repos = await listRepos({ mode, me, pullRequests, jobs, owners });
+
+  if (repos.length) {
+    const actionGroups = await mapLimit(repos, jobs, fetchActionsForRepo);
+    failedActions = markAutoDismissedDependabotRuns(
+      uniqueBy(actionGroups.flatMap((group) => group.failed), (run) => run.url || JSON.stringify(run))
+    );
+    runningActions = uniqueBy(actionGroups.flatMap((group) => group.running), (run) => run.url || JSON.stringify(run));
+    pullRequests = applyActionRunEvidenceToPullRequests(pullRequests, { runningActions, failedActions });
+  }
+
+  if (includeCd && repos.length) {
+    const cdGroups = await mapLimit(repos, jobs, fetchCdForRepo);
+    cdRowsByRepo = new Map(cdGroups.map((group, index) => [
+      repos[index],
+      [...group.failed, ...group.finished, ...group.running]
+    ]));
+    failedCd = uniqueBy(cdGroups.flatMap((group) => group.failed), (run) => run.url || JSON.stringify(run))
+      .filter((run) => !run.resolvedBy);
+    finishedCd = uniqueBy(cdGroups.flatMap((group) => group.finished), (run) => run.url || JSON.stringify(run));
+    runningCd = uniqueBy(cdGroups.flatMap((group) => group.running), (run) => run.url || JSON.stringify(run));
+    const deploymentGroups = await mapLimit(repos, jobs, fetchRunningDeploymentsForRepo);
+    runningDeployments = uniqueBy(deploymentGroups.flat(), (deployment) => deployment.url || JSON.stringify(deployment));
+  }
+
+  if (includeRunners) {
+    busyRunners = await fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners });
+  }
+
+  if (includeTraces && repos.length) {
+    const mergedGroups = await mapLimit(repos, jobs, async (repo) => {
+      try {
+        return await fetchRecentMergedPullRequests(repo);
+      } catch {
+        return [];
+      }
+    });
+    mergedPullRequestsByRepo = new Map(mergedGroups.map((group, index) => [repos[index], group]));
+    traces = buildPipelineTraces({ pullRequests, mergedPullRequestsByRepo, cdRowsByRepo, includeCd });
+  } else if (includeTraces) {
+    traces = buildPipelineTraces({ pullRequests, includeCd });
+  }
+
+  const prGroups = groupPullRequests(pullRequests);
+  syncAutoMergeFromStatus(pullRequests, { mode, jobs, owners });
+  const accounts = await allOwners(me);
+  const summary = {
+    repos: repos.length || new Set(pullRequests.map((pr) => pr.repo)).size,
+    passingPrs: prGroups.pass.length,
+    noCiPrs: prGroups.noCi.length,
+    failingPrs: prGroups.fail.length + failedActions.length,
+    runningPrs: prGroups.running.length + runningActions.length,
+    conflictPrs: prGroups.conflicts.length,
+    runningCd: runningCd.length,
+    finishedCd: finishedCd.length,
+    skippedCd: finishedCd.filter((row) => row.outcome === "skipped").length,
+    runningDeployments: runningDeployments.length,
+    busyRunners: busyRunners.length,
+    failedCd: failedCd.length,
+    flaggedJourneys: traces.flagged.length,
+    activeJourneys: traces.active.length,
+    shippedJourneys: traces.completed.length,
+    tracingUnknown: traces.unknown.length
+  };
+  const rateLimit = snapshotRateLimit(scanMetrics.getStore() || createScanMetrics());
+  const warnings = buildDashboardWarnings(rateLimit, summary, { mode, jobs, includeCd, includeRunners, includeRepoRunners });
+  const cleanupSnapshot = dependabotCleanupSnapshot();
+  if (cleanupSnapshot.lastError) {
+    warnings.push(`Dependabot cleanup: ${cleanupSnapshot.lastError}`);
+  }
+
+  return {
+    account: me,
+    accounts,
+    generatedAt: new Date().toISOString(),
+    options: { mode, jobs, includeCd, includeTraces, includeRunners, includeRepoRunners, owners },
+    summary,
+    rateLimit,
+    warnings,
+    refresh: recommendRefresh(summary, { mode, jobs, includeCd, includeRunners, includeRepoRunners }, rateLimit),
+    pullRequests: prGroups,
+    actions: {
+      failed: failedActions.sort(sortByCreatedDesc),
+      running: runningActions.sort(sortByCreatedDesc)
+    },
+    cd: {
+      running: runningCd.sort(sortByCreatedDesc),
+      finished: finishedCd.sort(sortByCreatedDesc),
+      failed: failedCd.sort(sortByCreatedDesc)
+    },
+    traces,
+    deployments: {
+      running: runningDeployments.sort(sortByCreatedDesc)
+    },
+    runners: {
+      busy: busyRunners.sort((a, b) => `${a.scope}/${a.name}`.localeCompare(`${b.scope}/${b.name}`))
+    },
+    autoMerge: autoMergeSnapshot(),
+    dependabotCleanup: cleanupSnapshot
+  };
+}
+
+function autoMergeKey(repo, number) {
+  return `${repo}#${number}`;
+}
+
+function autoMergeSnapshot() {
+  return {
+    enabled: autoMergeState.enabled,
+    running: autoMergeState.running,
+    mode: autoMergeState.options.mode,
+    jobs: autoMergeState.options.jobs,
+    owners: autoMergeState.options.owners || [],
+    lastScanAt: autoMergeState.lastScanAt,
+    lastError: autoMergeState.lastError,
+    candidates: [...autoMergeState.candidates.values()]
+      .map((candidate) => ({
+        repo: candidate.repo,
+        number: candidate.number,
+        numberLabel: candidate.numberLabel,
+        title: candidate.title,
+        url: candidate.url,
+        deadline: new Date(candidate.deadline).toISOString(),
+        error: candidate.error || ""
+      }))
+      .sort(sortByRepoAndNumber)
+  };
+}
+
+function clearAutoMergeTimer() {
+  if (!autoMergeState.timer) return;
+  clearTimeout(autoMergeState.timer);
+  autoMergeState.timer = null;
+}
+
+function scheduleAutoMergeScan(delayMs = 0) {
+  if (!autoMergeState.enabled || autoMergeState.timer || autoMergeState.running) return;
+  autoMergeState.timer = setTimeout(runAutoMergeScan, Math.max(0, delayMs));
+}
+
+function syncAutoMergeCandidates(pullRequests) {
+  const now = Date.now();
+  const eligibleKeys = new Set();
+  for (const pr of pullRequests) {
+    if (!isAutoMergeCandidate(pr)) continue;
+    const key = autoMergeKey(pr.repo, pr.number);
+    eligibleKeys.add(key);
+    const existing = autoMergeState.candidates.get(key);
+    autoMergeState.candidates.set(key, {
+      repo: pr.repo,
+      number: pr.number,
+      numberLabel: pr.numberLabel,
+      title: pr.title,
+      url: pr.url,
+      deadline: existing?.deadline || now + AUTO_MERGE_DELAY_MS,
+      error: ""
+    });
+  }
+
+  for (const key of [...autoMergeState.candidates.keys()]) {
+    if (!eligibleKeys.has(key)) autoMergeState.candidates.delete(key);
+  }
+}
+
+function syncAutoMergeFromStatus(pullRequests, options) {
+  if (!autoMergeState.enabled) return;
+  if (autoMergeState.options.mode !== options.mode) return;
+  if (autoMergeState.options.jobs !== options.jobs) return;
+  if (!sameAutoMergeOwners(autoMergeState.options.owners, options.owners)) return;
+  syncAutoMergeCandidates(pullRequests);
+  if (!autoMergeState.running) {
+    clearAutoMergeTimer();
+    scheduleAutoMergeScan(nextAutoMergeDelay());
+  }
+}
+
+function nextAutoMergeDelay() {
+  const now = Date.now();
+  const deadlines = [...autoMergeState.candidates.values()].map((candidate) => candidate.deadline);
+  const nextDeadline = deadlines.length ? Math.max(1000, Math.min(...deadlines) - now) : AUTO_MERGE_SCAN_MS;
+  return Math.min(nextDeadline, AUTO_MERGE_SCAN_MS);
+}
+
+async function executeMergePullRequest(repo, number, methodValue) {
+  const pr = await fetchPullRequestByNumber(repo, number);
+  const reason = mergeBlockReason(pr);
+  if (reason) {
+    throw new HttpError(409, reason);
+  }
+
+  const result = await githubRequest(`/repos/${repo}/pulls/${number}/merge`, {
+    method: "PUT",
+    body: {
+      merge_method: mergeMethod(methodValue)
+    }
+  });
+  const merged = Boolean(result?.merged);
+  const branchDelete = merged
+    ? await deletePullRequestBranch(pr)
+    : { deleted: false, skipped: true, reason: "Pull request was not merged." };
+
+  return {
+    merged,
+    message: result?.message || "Pull request merged.",
+    branchDelete,
+    pr: {
+      repo: pr.repo,
+      number: pr.number,
+      numberLabel: pr.numberLabel,
+      title: pr.title,
+      url: pr.url
+    }
+  };
+}
+
+async function runAutoMergeScan() {
+  clearAutoMergeTimer();
+  if (!autoMergeState.enabled || autoMergeState.running) return;
+
+  autoMergeState.running = true;
+  autoMergeState.lastError = "";
+  try {
+    const metrics = createScanMetrics();
+    await scanMetrics.run(metrics, async () => {
+      const me = await getAccount();
+      const pullRequests = await fetchPullRequests({
+        mode: autoMergeState.options.mode,
+        me,
+        jobs: autoMergeState.options.jobs,
+        owners: autoMergeState.options.owners
+      });
+      syncAutoMergeCandidates(pullRequests);
+    });
+    autoMergeState.lastScanAt = new Date().toISOString();
+
+    const now = Date.now();
+    const due = [...autoMergeState.candidates.values()].filter((candidate) => candidate.deadline <= now);
+    for (const candidate of due) {
+      const key = autoMergeKey(candidate.repo, candidate.number);
+      autoMergeState.candidates.delete(key);
+      try {
+        await executeMergePullRequest(candidate.repo, candidate.number);
+      } catch (error) {
+        if (!error.status || error.status >= 500) {
+          autoMergeState.candidates.set(key, {
+            ...candidate,
+            deadline: Date.now() + AUTO_MERGE_SCAN_MS,
+            error: error.message || "Auto merge failed"
+          });
+        } else {
+          autoMergeState.lastError = error.message || "Auto merge failed";
+        }
+      }
+    }
+  } catch (error) {
+    autoMergeState.lastError = error.message || "Auto merge scan failed";
+  } finally {
+    autoMergeState.running = false;
+    if (autoMergeState.enabled) scheduleAutoMergeScan(nextAutoMergeDelay());
+  }
+}
+
+async function autoMergeConfig(req, res) {
+  if (req.method === "GET") {
+    await sendJson(res, 200, autoMergeSnapshot());
+    return;
+  }
+  if (req.method !== "POST" && req.method !== "PUT") {
+    throw new HttpError(405, "Method not allowed");
+  }
+
+  const body = await readJsonBody(req);
+  const nextOptions = {
+    mode: normalizeMode(body.mode),
+    jobs: parseJobs(body.jobs),
+    owners: parseOwners(body.owners)
+  };
+  const optionsChanged =
+    autoMergeState.options.mode !== nextOptions.mode ||
+    autoMergeState.options.jobs !== nextOptions.jobs ||
+    !sameAutoMergeOwners(autoMergeState.options.owners, nextOptions.owners);
+  autoMergeState.enabled = Boolean(body.enabled);
+  autoMergeState.options = nextOptions;
+  autoMergeState.lastError = "";
+
+  if (autoMergeState.enabled) {
+    clearAutoMergeTimer();
+    if (optionsChanged) autoMergeState.candidates.clear();
+    scheduleAutoMergeScan(0);
+  } else {
+    clearAutoMergeTimer();
+    autoMergeState.candidates.clear();
+  }
+
+  await sendJson(res, 200, autoMergeSnapshot());
+}
+
+function groupPullRequests(pullRequests) {
+  return {
+    pass: pullRequests.filter((pr) => pr.state === "pass" && pr.checkCount > 0 && !pr.hasConflict).sort(sortByRepoAndNumber),
+    noCi: pullRequests
+      .filter((pr) => pr.state === "pass" && pr.checkCount === 0 && !pr.isDraft && !pr.hasConflict)
+      .sort(sortByRepoAndNumber),
+    fail: pullRequests.filter((pr) => pr.state === "fail" && !pr.hasConflict).sort(sortByRepoAndNumber),
+    running: pullRequests.filter((pr) => pr.state === "running" && !pr.hasConflict).sort(sortByRepoAndNumber),
+    conflicts: pullRequests.filter((pr) => pr.hasConflict).sort(sortByRepoAndNumber)
+  };
+}
+
+function mergeBlockReason(pr) {
+  if (!pr || pr.state !== "pass") return "This pull request is not ready to merge.";
+  if (pr.isDraft) return "Draft pull requests cannot be merged.";
+  if (pr.hasConflict) return "This pull request has merge conflicts.";
+  if (pr.checkCount === 0 && pr.mergeable !== "MERGEABLE") {
+    return "This pull request is not currently mergeable.";
+  }
+  return "";
+}
+
+function isAutoMergeCandidate(pr) {
+  return !mergeBlockReason(pr) && pr.checkCount > 0;
+}
+
+function sortByRepoAndNumber(a, b) {
+  return a.repo.localeCompare(b.repo) || a.number - b.number;
+}
+
+function sortByCreatedDesc(a, b) {
+  return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+}
+
+async function sendJson(res, status, body) {
+  res.writeHead(status, {
+    ...SECURITY_HEADERS,
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  res.end(JSON.stringify(body));
+}
+
+async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > maxBytes) {
+        reject(new HttpError(413, "Request body is too large."));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new HttpError(400, "Request body must be valid JSON."));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function mergeMethod(value) {
+  if (value == null || value === "") return undefined;
+  if (["merge", "squash", "rebase"].includes(value)) return value;
+  throw new HttpError(400, "mergeMethod must be merge, squash, or rebase.");
+}
+
+function encodeRefPath(ref) {
+  return String(ref)
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+async function deletePullRequestBranch(pr) {
+  if (!pr.headRepo || !pr.headRefName) {
+    return {
+      deleted: false,
+      skipped: true,
+      reason: "Pull request head branch was not available."
+    };
+  }
+
+  try {
+    await githubRequest(`/repos/${pr.headRepo}/git/refs/heads/${encodeRefPath(pr.headRefName)}`, {
+      method: "DELETE"
+    });
+    return {
+      deleted: true,
+      repo: pr.headRepo,
+      branch: pr.headRefName
+    };
+  } catch (error) {
+    if (error.status === 404) {
+      return {
+        deleted: true,
+        alreadyDeleted: true,
+        repo: pr.headRepo,
+        branch: pr.headRefName
+      };
+    }
+    return {
+      deleted: false,
+      repo: pr.headRepo,
+      branch: pr.headRefName,
+      error: error.message
+    };
+  }
+}
+
+async function mergePullRequest(req, res) {
+  if (req.method !== "POST") {
+    throw new HttpError(405, "Method not allowed");
+  }
+
+  const body = await readJsonBody(req);
+  const { repo } = parseRepo(body.repo);
+  const number = parsePullNumber(body.number);
+  autoMergeState.candidates.delete(autoMergeKey(repo, number));
+  await sendJson(res, 200, await executeMergePullRequest(repo, number, body.mergeMethod));
+}
+
+async function closePullRequest(req, res) {
+  if (req.method !== "POST") {
+    throw new HttpError(405, "Method not allowed");
+  }
+
+  const body = await readJsonBody(req);
+  const { repo } = parseRepo(body.repo);
+  const number = parsePullNumber(body.number);
+  autoMergeState.candidates.delete(autoMergeKey(repo, number));
+  const pr = await fetchPullRequestByNumber(repo, number);
+
+  const result = await githubRequest(`/repos/${repo}/pulls/${number}`, {
+    method: "PATCH",
+    body: {
+      state: "closed"
+    }
+  });
+
+  await sendJson(res, 200, {
+    closed: result?.state === "closed",
+    message: result?.state === "closed" ? "Pull request closed." : "GitHub did not close the pull request.",
+    pr: {
+      repo: pr.repo,
+      number: pr.number,
+      numberLabel: pr.numberLabel,
+      title: pr.title,
+      url: pr.url
+    }
+  });
+}
+
+async function sendStatic(req, res) {
+  const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
+  const normalized = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  const filePath = join(publicDir, normalized);
+  if (!filePath.startsWith(publicDir)) throw new HttpError(403, "Forbidden");
+  const data = await readFile(filePath);
+  const types = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml"
+  };
+  res.writeHead(200, {
+    ...SECURITY_HEADERS,
+    "content-type": types[extname(filePath)] || "application/octet-stream",
+    "cache-control": "no-store"
+  });
+  res.end(data);
+}
+
+let historySummaryCache = null;
+let historySummaryCacheAt = 0;
+const HISTORY_SUMMARY_CACHE_TTL_MS = 60 * 1000;
+
+async function getHistorySummary() {
+  if (!HISTORY_ENABLED) return null;
+  const now = Date.now();
+  if (historySummaryCache && now - historySummaryCacheAt < HISTORY_SUMMARY_CACHE_TTL_MS) {
+    return historySummaryCache;
+  }
+  const entries = await readHistoryFiles();
+  historySummaryCache = summarizeHistory(entries);
+  historySummaryCacheAt = now;
+  return historySummaryCache;
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const requestUrl = new URL(req.url, `http://${req.headers.host}`);
+    if (requestUrl.pathname === "/api/status") {
+      const metrics = createScanMetrics();
+      let data;
+      try {
+        await scanMetrics.run(metrics, async () => {
+          data = await buildDashboardData(requestUrl);
+        });
+        data.history = await getHistorySummary();
+        await sendJson(res, 200, data);
+        if (HISTORY_ENABLED) {
+          const quota = snapshotRateLimit(scanMetrics.getStore() || createScanMetrics());
+          const tightest = quota.tightest || {};
+          appendHistorySnapshot({
+            ts: new Date().toISOString(),
+            mode,
+            owners: Array.isArray(owners) ? owners : [],
+            repos: data?.summary?.repos ?? 0,
+            passingPrs: data?.summary?.passingPrs ?? 0,
+            failingPrs: data?.summary?.failingPrs ?? 0,
+            runningPrs: data?.summary?.runningPrs ?? 0,
+            noCiPrs: data?.summary?.noCiPrs ?? 0,
+            conflictPrs: data?.summary?.conflictPrs ?? 0,
+            runningCd: data?.summary?.runningCd ?? 0,
+            finishedCd: data?.summary?.finishedCd ?? 0,
+            skippedCd: data?.summary?.skippedCd ?? 0,
+            failedCd: data?.summary?.failedCd ?? 0,
+            runningDeployments: data?.summary?.runningDeployments ?? 0,
+            busyRunners: data?.summary?.busyRunners ?? 0,
+            includeCd,
+            includeRunners: includeRunners || includeRepoRunners,
+            quotaRemaining: tightest.remaining ?? null,
+            quotaLimit: tightest.limit ?? null
+          });
+        }
+      } catch (error) {
+        const status = error.status || 500;
+        await sendJson(res, status, {
+          error: error.message || "Unexpected error",
+          rateLimit: snapshotRateLimit(metrics)
+        });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/runners/status") {
+      if (req.method !== "GET") {
+        throw new HttpError(405, "Method not allowed");
+      }
+      const metrics = createScanMetrics();
+      try {
+        await scanMetrics.run(metrics, async () => {
+          const data = await buildBusyRunnerData(requestUrl);
+          await sendJson(res, 200, data);
+        });
+      } catch (error) {
+        const status = error.status || 500;
+        await sendJson(res, status, {
+          error: error.message || "Unexpected error",
+          rateLimit: snapshotRateLimit(metrics)
+        });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/pull-request/merge") {
+      await mergePullRequest(req, res);
+      return;
+    }
+    if (requestUrl.pathname === "/api/auto-merge") {
+      await autoMergeConfig(req, res);
+      return;
+    }
+    if (requestUrl.pathname === "/api/pull-request/close") {
+      await closePullRequest(req, res);
+      return;
+    }
+    if (requestUrl.pathname === "/api/health") {
+      await sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (requestUrl.pathname === "/api/history/scans") {
+      const since = requestUrl.searchParams.get("since");
+      const entries = await readHistoryFiles(since);
+      await sendJson(res, 200, { entries, enabled: HISTORY_ENABLED });
+      return;
+    }
+    if (requestUrl.pathname === "/api/history/summary") {
+      const since = requestUrl.searchParams.get("since");
+      const entries = await readHistoryFiles(since);
+      const summary = summarizeHistory(entries);
+      await sendJson(res, 200, { ...summary, enabled: HISTORY_ENABLED });
+      return;
+    }
+    await sendStatic(req, res);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      await sendJson(res, 404, { error: "Not found" });
+      return;
+    }
+    const status = error.status || 500;
+    await sendJson(res, status, { error: error.message || "Unexpected error" });
+  }
+});
+
+if (isMain) {
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`GitHub Monitor dashboard: http://127.0.0.1:${port}`);
+    console.log(`Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`);
+    console.log(`Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`);
+    scheduleDependabotQueueScan(0);
+  });
+}
+
+export {
+  SECURITY_HEADERS,
+  bestProductionUrlCandidate,
+  buildChangeSummary,
+  classifyPullRequest,
+  extractProductionUrlsFromText,
+  groupPullRequests,
+  applyActionRunEvidenceToPullRequests,
+  isProductionTargetScanPath,
+  productionTargetFromCodeFiles,
+  publicRouteFromFile,
+  isBackendUrl,
+  isAutoMergeCandidate,
+  mergeBlockReason,
+  openPullRequestSearchQuery,
+  quotaState,
+  recordRateLimit,
+  snapshotRateLimit,
+  resetObservedRateBuckets,
+  createScanMetrics,
+  scanMetrics,
+  recommendRefresh,
+  runOutcome,
+  cdRunMatchesPr,
+  isDeployNeutralFile,
+  mergedPrIsDeployNeutral,
+  buildPipelineTraces,
+  selectFailedActionRuns,
+  selectFailedCdRuns,
+  findSupersedingSuccessfulRun,
+  applyConditionalHeaders,
+  takeCachedConditionalResponse,
+  storeConditionalResponse,
+  extractOwnerFromPath,
+  buildAppJwtPayload,
+  signAppJwt,
+  installationTokenIsValid,
+  parseOwners,
+  parseDependabotQueueThreshold,
+  isDependabotLogin,
+  isDependabotWorkflowRun,
+  dependabotQueueDepth,
+  shouldCleanDependabotQueue,
+  markAutoDismissedDependabotRuns,
+  hasFailedCiSignal,
+  cleanupDependabotWorkload,
+  runDependabotQueueScan,
+  resetDependabotCleanupState,
+  sameAutoMergeOwners,
+  server
+};

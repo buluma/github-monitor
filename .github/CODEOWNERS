@@ -1,0 +1,10 @@
+# Sensitive project governance and automation paths require maintainer review.
+/.github/ @ryabinski-labs
+/SECURITY.md @ryabinski-labs
+/CODE_OF_CONDUCT.md @ryabinski-labs
+/CONTRIBUTING.md @ryabinski-labs
+/MAINTAINERS.md @ryabinski-labs
+/LICENSE @ryabinski-labs
+/package.json @ryabinski-labs
+/package-lock.json @ryabinski-labs
+/server.js @ryabinski-labs
