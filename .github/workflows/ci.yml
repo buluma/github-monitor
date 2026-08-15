@@ -115,8 +115,8 @@ jobs:
           }
 
           const maintainers = readFileSync("MAINTAINERS.md", "utf8");
-          if (!maintainers.includes("cigan1@gmail.com")) {
-            failures.push("MAINTAINERS.md must list cigan1@gmail.com");
+          if (!maintainers.includes("1452922+buluma@users.noreply.github.com")) {
+            failures.push("MAINTAINERS.md must list 1452922+buluma@users.noreply.github.com");
           }
 
           if (failures.length) {
