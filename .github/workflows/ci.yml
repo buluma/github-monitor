@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,10 +26,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -67,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Validate public repository hygiene
         shell: bash
@@ -115,8 +114,8 @@ jobs:
           }
 
           const maintainers = readFileSync("MAINTAINERS.md", "utf8");
-          if (!maintainers.includes("1452922+buluma@users.noreply.github.com")) {
-            failures.push("MAINTAINERS.md must list 1452922+buluma@users.noreply.github.com");
+          if (!maintainers.includes("cigan1@gmail.com")) {
+            failures.push("MAINTAINERS.md must list cigan1@gmail.com");
           }
 
           if (failures.length) {
@@ -193,10 +192,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24.x
           cache: npm
