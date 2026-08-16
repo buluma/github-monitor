@@ -17,6 +17,9 @@ try {
 }
 const publicDir = join(__dirname, "public");
 const port = Number(process.env.PORT || 4177);
+// Bind host. Defaults to loopback (local-first); set HOST=0.0.0.0 in Docker so
+// the dashboard is reachable from the container's mapped port.
+const host = process.env.HOST || "127.0.0.1";
 const githubApiBase = "https://api.github.com";
 const githubGraphqlUrl = "https://api.github.com/graphql";
 const GITHUB_APP_ID = process.env.GITHUB_APP_ID || "";
@@ -4986,8 +4989,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (isMain) {
-  server.listen(port, "127.0.0.1", () => {
-    console.log(`GitHub Monitor dashboard: http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    const displayHost =
+      host === "0.0.0.0" || host === "::" ? "localhost" : host;
+    console.log(`GitHub Monitor dashboard: http://${displayHost}:${port}`);
     console.log(
       `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
     );

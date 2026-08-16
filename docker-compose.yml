@@ -1,0 +1,37 @@
+services:
+  github-monitor:
+    build: .
+    image: github-monitor:latest
+    container_name: github-monitor
+    restart: unless-stopped
+    ports:
+      - "4177:4177"
+    # Pull tokens/keys from your existing .env (gitignored). Explicit `environment`
+    # entries below take precedence, so container-relative paths win.
+    env_file:
+      - .env
+    environment:
+      PORT: 4177
+      HOST: 0.0.0.0
+      HISTORY_ENABLED: "1"
+      HISTORY_DIR: /app/history
+      # Default auth: GitHub App (higher quota, per-installation rate limits).
+      # GITHUB_APP_ID comes straight from .env; only the key path is rewritten to
+      # the in-container mount point. To switch to a personal access token, set
+      # GITHUB_TOKEN=... in .env and leave GITHUB_APP_ID empty.
+      GITHUB_APP_PRIVATE_KEY_PATH: /app/github-app.pem
+    volumes:
+      # Persist scan history across container restarts/rebuilds.
+      - github-monitor-history:/app/history
+      # GitHub App private key (mode 0600). Adjust the source path if your key
+      # lives elsewhere, e.g. ~/.config/github-monitor/app.pem.
+      - ./github-app.pem:/app/github-app.pem:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4177/api/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  github-monitor-history:

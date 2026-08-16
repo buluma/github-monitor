@@ -1,0 +1,14 @@
+node_modules/
+npm-debug.log*
+.git/
+.gitignore
+.playwright-mcp/
+test/
+*.md
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+Dockerfile
+docker-compose.yml
