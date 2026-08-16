@@ -136,7 +136,7 @@ kbd {
   grid-template-columns: auto 1fr;
   gap: 18px;
   align-items: center;
-  padding: 10px;
+  padding: 5px 10px 5px 5px;
   background: linear-gradient(to bottom, var(--paper) 60%, color-mix(in srgb, var(--paper) 92%, transparent));
   backdrop-filter: saturate(120%) blur(6px);
   border-bottom: 1px solid var(--line);

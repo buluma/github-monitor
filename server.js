@@ -2,7 +2,7 @@ import http from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { createSign } from "node:crypto";
-import { readFile, stat, mkdir, readdir, appendFile } from "node:fs/promises";
+import { readFile, stat, mkdir, readdir, appendFile, cp, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -5060,19 +5060,107 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// ——— Static snapshot export (GitHub Pages / CI) ———
+// `node server.js --snapshot [--out dist] [--query "mode=all&..."]` runs one scan
+// and writes a fully static, self-contained copy of the dashboard:
+//   dist/index.html     rewritten to relative asset URLs + static-mode meta tag
+//   dist/status.json    the exact payload /api/status would have returned
+//   dist/history.json   the exact payload /api/history/scans would have returned
+// The frontend detects the meta tag, skips polling/actions, and renders from the
+// local JSON files — so the bundle can be published to any static host.
+const SNAPSHOT_DEFAULT_QUERY =
+  "mode=all&includeCd=1&includeTraces=1&includeRunners=1&includeRepoRunners=0&jobs=4";
+
+export function rewriteStaticIndex(html) {
+  const withMeta = html.includes('name="gh-monitor-static"')
+    ? html
+    : html.replace(
+        /(<head[^>]*>)/i,
+        '$1<meta name="gh-monitor-static" content="1" />',
+      );
+  // GitHub Pages serves project sites under a base path (/repo/), so absolute
+  // asset URLs ("/app.js") would break. Relative URLs resolve against the page.
+  return withMeta.replace(/(src|href)="\/([^"]+)"/g, '$1="$2"');
+}
+
+async function runSnapshot() {
+  const args = process.argv.slice(2);
+  const argValue = (name, fallback = "") => {
+    const index = args.indexOf(name);
+    return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
+  };
+  const outDir = argValue("--out", "dist");
+  const query =
+    process.env.SNAPSHOT_QUERY || argValue("--query", SNAPSHOT_DEFAULT_QUERY);
+  const requestUrl = new URL(`http://snapshot.local/api/status?${query}`);
+  const metrics = createScanMetrics();
+  const startedAt = Date.now();
+
+  let payload;
+  try {
+    payload = await scanMetrics.run(metrics, async () => {
+      const data = await buildDashboardData(requestUrl);
+      data.history = await getHistorySummary();
+      return data;
+    });
+  } catch (error) {
+    console.error(`[snapshot] scan failed: ${error?.stack || error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    await cp(publicDir, outDir, { recursive: true });
+    const indexPath = join(outDir, "index.html");
+    const html = await readFile(indexPath, "utf8");
+    await writeFile(indexPath, rewriteStaticIndex(html), "utf8");
+    await writeFile(join(outDir, "status.json"), JSON.stringify(payload));
+    await writeFile(
+      join(outDir, "history.json"),
+      JSON.stringify({
+        entries: await readHistoryFiles(),
+        enabled: historyEnabled(),
+      }),
+    );
+  } catch (error) {
+    console.error(`[snapshot] write failed: ${error?.stack || error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const quota = snapshotRateLimit(metrics);
+  const tightest = quota.tightest || {};
+  console.log(
+    `[snapshot] ${JSON.stringify({
+      ts: new Date().toISOString(),
+      mode: payload.options?.mode || "all",
+      repos: payload.summary?.repos ?? 0,
+      durationMs: Date.now() - startedAt,
+      requests: metrics.requestCount,
+      conditionalHits: metrics.conditionalHits,
+      quotaRemaining: tightest.remaining ?? null,
+      out: outDir,
+    })}`,
+  );
+}
+
 if (isMain) {
-  server.listen(port, host, () => {
-    const displayHost =
-      host === "0.0.0.0" || host === "::" ? "localhost" : host;
-    console.log(`GitHub Monitor dashboard: http://${displayHost}:${port}`);
-    console.log(
-      `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
-    );
-    console.log(
-      `Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`,
-    );
-    scheduleDependabotQueueScan(0);
-  });
+  if (process.argv.includes("--snapshot")) {
+    runSnapshot();
+  } else {
+    server.listen(port, host, () => {
+      const displayHost =
+        host === "0.0.0.0" || host === "::" ? "localhost" : host;
+      console.log(`GitHub Monitor dashboard: http://${displayHost}:${port}`);
+      console.log(
+        `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
+      );
+      console.log(
+        `Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`,
+      );
+      scheduleDependabotQueueScan(0);
+    });
+  }
 }
 
 // Last-resort guards: log loudly and keep serving instead of letting a stray
