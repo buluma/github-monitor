@@ -39,6 +39,7 @@ export async function initDb(overridePath = null) {
     dbInstance.exec("PRAGMA synchronous = NORMAL;");
 
     createTables(dbInstance);
+    migrateSchema(dbInstance);
     dbInitialized = true;
     return dbInstance;
   } catch (err) {
@@ -46,6 +47,21 @@ export async function initDb(overridePath = null) {
     dbInstance = null;
     dbInitialized = true;
     return null;
+  }
+}
+
+function migrateSchema(db) {
+  // Backfill the cached_at column added after the table was created in the wild.
+  try {
+    const cols = db
+      .prepare(`PRAGMA table_info(etag_cache)`)
+      .all()
+      .map((c) => c.name);
+    if (!cols.includes("cached_at")) {
+      db.exec(`ALTER TABLE etag_cache ADD COLUMN cached_at INTEGER`);
+    }
+  } catch {
+    // Best effort
   }
 }
 
@@ -78,7 +94,8 @@ function createTables(db) {
       etag TEXT,
       last_modified TEXT,
       body TEXT,
-      expires_at INTEGER
+      expires_at INTEGER,
+      cached_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS github_value_cache (
@@ -310,13 +327,21 @@ export function saveEtagCacheDb(key, method, etag, lastModified, body, expiresAt
   if (!dbInstance) return;
   try {
     const stmt = dbInstance.prepare(`
-      INSERT INTO etag_cache (key, method, etag, last_modified, body, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO etag_cache (key, method, etag, last_modified, body, expires_at, cached_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET
         method=excluded.method, etag=excluded.etag, last_modified=excluded.last_modified,
-        body=excluded.body, expires_at=excluded.expires_at
+        body=excluded.body, expires_at=excluded.expires_at, cached_at=excluded.cached_at
     `);
-    stmt.run(key, method || "GET", etag || "", lastModified || "", typeof body === "string" ? body : JSON.stringify(body), expiresAt || 0);
+    stmt.run(
+      key,
+      method || "GET",
+      etag || "",
+      lastModified || "",
+      typeof body === "string" ? body : JSON.stringify(body),
+      expiresAt || 0,
+      Date.now(),
+    );
   } catch {
     // Best effort
   }
@@ -433,6 +458,39 @@ export function saveStatusPayloadDb(query, payload) {
   }
 }
 
+/** Delete history snapshots older than the given ISO timestamp. Returns rows removed. */
+export function pruneHistorySnapshotsDb(beforeIso) {
+  if (!dbInstance) return 0;
+  try {
+    const info = dbInstance
+      .prepare(`DELETE FROM history_snapshots WHERE ts < ?`)
+      .run(beforeIso);
+    return info.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Load the persisted status payload for a single query string, or null. */
+export function loadStatusPayloadDb(query) {
+  if (!dbInstance) return null;
+  try {
+    const row = dbInstance
+      .prepare(
+        `SELECT query, payload, cached_at FROM status_payload_cache WHERE query = ?`,
+      )
+      .get(query);
+    if (!row) return null;
+    return {
+      query: row.query,
+      payload: JSON.parse(row.payload),
+      cachedAt: row.cached_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Load all persisted status payloads, newest first. Returns [{query, payload, cachedAt}]. */
 export function loadStatusPayloadsDb() {
   if (!dbInstance) return [];
@@ -447,5 +505,96 @@ export function loadStatusPayloadsDb() {
     }));
   } catch {
     return [];
+  }
+}
+
+// ----------------------------------------------------
+// Cache Pruning (keeps the on-disk DB from growing unbounded)
+// ----------------------------------------------------
+
+/** Delete github_value_cache rows whose TTL has elapsed, then cap the table to
+ * maxRows by evicting the soonest-to-expire rows. Never drops rows with
+ * expires_at = 0 (sentinel for "no expiry"). Returns rows removed. */
+export function pruneExpiredValueCacheDb(now = Date.now(), { maxRows = 500 } = {}) {
+  if (!dbInstance) return 0;
+  try {
+    let removed = 0;
+    const expired = dbInstance
+      .prepare(
+        `DELETE FROM github_value_cache WHERE expires_at > 0 AND expires_at < ?`,
+      )
+      .run(now);
+    removed += expired.changes ?? 0;
+
+    const count = dbInstance
+      .prepare(`SELECT COUNT(*) n FROM github_value_cache`)
+      .get().n;
+    if (count > maxRows) {
+      const excess = count - maxRows;
+      const capped = dbInstance
+        .prepare(
+          `DELETE FROM github_value_cache WHERE key IN (
+             SELECT key FROM github_value_cache ORDER BY expires_at ASC LIMIT ?
+           )`,
+        )
+        .run(excess);
+      removed += capped.changes ?? 0;
+    }
+    return removed;
+  } catch {
+    return 0;
+  }
+}
+
+/** Drop etag_cache entries past maxAgeMs, then cap the table to maxRows by
+ * evicting the oldest rows (NULL/0 cached_at — i.e. pre-migration rows —
+ * sort first, so the legacy cache is rotated out rather than pinned forever).
+ * Returns rows removed. */
+export function pruneEtagCacheDb({
+  maxAgeMs = 7 * 24 * 60 * 60 * 1000,
+  maxRows = 500,
+} = {}) {
+  if (!dbInstance) return 0;
+  try {
+    let removed = 0;
+    const ageCutoff = Date.now() - maxAgeMs;
+    const aged = dbInstance
+      .prepare(
+        `DELETE FROM etag_cache WHERE cached_at > 0 AND cached_at < ?`,
+      )
+      .run(ageCutoff);
+    removed += aged.changes ?? 0;
+
+    const count = dbInstance
+      .prepare(`SELECT COUNT(*) n FROM etag_cache`)
+      .get().n;
+    if (count > maxRows) {
+      const excess = count - maxRows;
+      const capped = dbInstance
+        .prepare(
+          `DELETE FROM etag_cache WHERE key IN (
+             SELECT key FROM etag_cache
+             ORDER BY cached_at ASC
+             LIMIT ?
+           )`,
+        )
+        .run(excess);
+      removed += capped.changes ?? 0;
+    }
+    return removed;
+  } catch {
+    return 0;
+  }
+}
+
+/** Rebuild the database file so freed pages are returned to the OS. Returns true
+ * on success. Requires no other active statements. */
+export function vacuumDb() {
+  if (!dbInstance) return false;
+  try {
+    dbInstance.exec("VACUUM;");
+    return true;
+  } catch {
+    return false;
   }
 }
