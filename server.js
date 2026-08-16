@@ -5208,12 +5208,20 @@ const SNAPSHOT_DEFAULT_QUERY =
   "mode=all&includeCd=1&includeTraces=1&includeRunners=1&includeRepoRunners=0&jobs=4";
 
 export function rewriteStaticIndex(html) {
-  const withMeta = html.includes('name="gh-monitor-static"')
-    ? html
-    : html.replace(
-        /(<head[^>]*>)/i,
-        '$1<meta name="gh-monitor-static" content="1" />',
-      );
+  let withMeta = html;
+  if (!html.includes('name="gh-monitor-static"')) {
+    const headMatch = html.match(/<head[\s>]/i);
+    if (headMatch) {
+      const headStart = headMatch.index;
+      const closingGt = html.indexOf(">", headStart);
+      if (closingGt !== -1) {
+        withMeta =
+          html.slice(0, closingGt + 1) +
+          '<meta name="gh-monitor-static" content="1" />' +
+          html.slice(closingGt + 1);
+      }
+    }
+  }
   // GitHub Pages serves project sites under a base path (/repo/), so absolute
   // asset URLs ("/app.js") would break. Relative URLs resolve against the page.
   return withMeta.replace(/(src|href)="\/([^"]+)"/g, '$1="$2"');

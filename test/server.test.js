@@ -2914,3 +2914,13 @@ test("/api/client/state endpoint supports GET, POST, and DELETE", async () => {
     );
   }
 });
+
+test("rewriteStaticIndex inserts meta tag linearly and rewrites absolute asset paths", () => {
+  const htmlInput = '<!DOCTYPE html><head lang="en"><script src="/app.js"></script><link href="/styles.css"></head>';
+  const rewritten = rewriteStaticIndex(htmlInput);
+  assert.ok(rewritten.includes('<meta name="gh-monitor-static" content="1" />'));
+  assert.ok(rewritten.includes('src="app.js"'));
+  assert.ok(rewritten.includes('href="styles.css"'));
+  // Ensure idempotency
+  assert.equal(rewriteStaticIndex(rewritten), rewritten);
+});
