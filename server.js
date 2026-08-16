@@ -608,19 +608,11 @@ async function hydrateCachesFromDb() {
   try {
     const etagRows = loadEtagCacheDb();
     for (const r of etagRows) {
-      let body = r.body;
-      if (
-        typeof body === "string" &&
-        (body.startsWith("{") || body.startsWith("["))
-      ) {
-        try {
-          body = JSON.parse(body);
-        } catch {}
-      }
+      // No `body`: restored entries issue conditional requests but don't hold the
+      // cached payload in memory, so a 304 for them re-fetches the body once.
       etagCache.set(r.key, {
         etag: r.etag,
         lastModified: r.last_modified,
-        body,
         method: r.method,
       });
     }
@@ -917,7 +909,9 @@ function summarizeHistory(entries, bucketMs = 60 * 60 * 1000) {
 function applyConditionalHeaders(headers, store, url, method) {
   if (!ETAG_CACHEABLE_METHODS.has(method)) return headers;
   const cached = store.get(url);
-  if (!cached?.etag) return headers;
+  // Only send the conditional header when we also hold the cached body. Restored
+  // (bodyless) entries must take the normal 200 path so we get a fresh body.
+  if (!cached?.etag || cached.body == null) return headers;
   return { ...headers, "if-none-match": cached.etag };
 }
 
@@ -925,7 +919,7 @@ function takeCachedConditionalResponse(store, url, method, status) {
   if (status !== 304) return null;
   if (!ETAG_CACHEABLE_METHODS.has(method)) return null;
   const cached = store.get(url);
-  if (!cached) return null;
+  if (!cached || cached.body == null) return null;
   return cached.body;
 }
 
@@ -1219,8 +1213,8 @@ function recommendRefresh(summary, options, rateLimit) {
   const problemCount = summary.failingPrs + summary.failedCd;
 
   // With a fixed baseline or minimum floor of 15 minutes (900s):
-  // let intervalSeconds = 600;
-  let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
+  let intervalSeconds = 600;
+  // let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
 
   if (options.mode === "all") intervalSeconds += 60;
   if (options.includeCd) intervalSeconds += 60;

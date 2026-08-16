@@ -333,7 +333,14 @@ export function clearClientStateDb() {
 export function loadEtagCacheDb() {
   if (!dbInstance) return [];
   try {
-    const stmt = dbInstance.prepare(`SELECT key, method, etag, last_modified, body, expires_at FROM etag_cache`);
+    // Intentionally omit `body`: restoring every cached response body into memory
+    // at startup is what pushed the process past its heap limit (some bodies are
+    // multiple MB). We only need the etag/last_modified to issue conditional
+    // requests; bodies are re-fetched on first use and re-persisted via
+    // saveEtagCacheDb. See applyConditionalHeaders for the bodyless guard.
+    const stmt = dbInstance.prepare(
+      `SELECT key, method, etag, last_modified, expires_at FROM etag_cache`,
+    );
     return stmt.all();
   } catch {
     return [];
