@@ -22,7 +22,7 @@ import {
   saveGithubValueCacheDb,
   pruneExpiredValueCacheDb,
   pruneEtagCacheDb,
-  vacuumDb,
+  reclaimSpaceDb,
   loadInstallationTokensDb,
   saveInstallationTokenDb,
   loadAutoMergeCandidatesDb,
@@ -805,7 +805,7 @@ async function pruneOldHistory() {
     removed += pruneHistorySnapshotsDb(cutoffIso);
     removed += pruneExpiredValueCacheDb();
     removed += pruneEtagCacheDb();
-    if (removed > 0) vacuumDb();
+    if (removed > 0) reclaimSpaceDb();
 
     const base = historyBasePath();
     const years = await readdir(base).catch(() => []);

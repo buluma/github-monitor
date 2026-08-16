@@ -40,6 +40,7 @@ export async function initDb(overridePath = null) {
 
     createTables(dbInstance);
     migrateSchema(dbInstance);
+    ensureIncrementalVacuum(dbInstance);
     dbInitialized = true;
     return dbInstance;
   } catch (err) {
@@ -59,6 +60,22 @@ function migrateSchema(db) {
       .map((c) => c.name);
     if (!cols.includes("cached_at")) {
       db.exec(`ALTER TABLE etag_cache ADD COLUMN cached_at INTEGER`);
+    }
+  } catch {
+    // Best effort
+  }
+}
+
+// Switch the database to incremental auto-vacuum so reclaimed pages can be
+// returned to the OS without a full-file rewrite (which would block the event
+// loop). The conversion itself needs a one-time VACUUM, but only runs on the
+// first boot of a freshly-created (NONE) database.
+function ensureIncrementalVacuum(db) {
+  try {
+    const mode = db.prepare(`PRAGMA auto_vacuum`).get().auto_vacuum;
+    if (mode !== 2) {
+      db.exec(`PRAGMA auto_vacuum = INCREMENTAL;`);
+      db.exec(`VACUUM;`);
     }
   } catch {
     // Best effort
@@ -587,12 +604,17 @@ export function pruneEtagCacheDb({
   }
 }
 
-/** Rebuild the database file so freed pages are returned to the OS. Returns true
- * on success. Requires no other active statements. */
-export function vacuumDb() {
+/** Return freed pages to the OS incrementally (no full-file rewrite, so it
+ * stays off the event-loop hot path). Only does work when the freelist is
+ * non-trivial, and only ever truncates free pages — never reorganizes live
+ * data. Returns true if it reclaimed anything. */
+const RECLAIM_MIN_FREE_PAGES = 64;
+export function reclaimSpaceDb() {
   if (!dbInstance) return false;
   try {
-    dbInstance.exec("VACUUM;");
+    const free = db.prepare(`PRAGMA freelist_count`).get().freelist_count;
+    if (!free || free < RECLAIM_MIN_FREE_PAGES) return false;
+    dbInstance.exec(`PRAGMA incremental_vacuum(${free});`);
     return true;
   } catch {
     return false;
