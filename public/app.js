@@ -245,7 +245,10 @@ const views = {
         ? "No scan history yet. Enable history with HISTORY_ENABLED=1 and wait for scans."
         : "History is disabled. Set HISTORY_ENABLED=1 to enable local scan history.",
     color: "ink",
-    rows: (data) => data.history?.entries || [],
+    // Render hourly rollups, not every individual scan — thousands of raw
+    // entries made the History view unusably long. The server already sends
+    // these as data.history.buckets (~48 rows for the 48h retention window).
+    rows: (data) => data.history?.buckets || [],
   },
 };
 
@@ -2361,11 +2364,16 @@ function renderRow(row, viewKey, view) {
 
 function renderHistoryRow(entry) {
   const ts = entry.ts ? formatDateTime(entry.ts) : "—";
-  const mode = escapeHtml(entry.mode || "all");
-  const owners =
-    Array.isArray(entry.owners) && entry.owners.length
-      ? escapeHtml(entry.owners.join(", "))
-      : "all";
+  // Raw scans carry mode/owners; hourly rollups (buckets) carry a scan count
+  // instead. Show whichever the entry has.
+  const scope =
+    entry.scans != null
+      ? `${entry.scans} scan${entry.scans === 1 ? "" : "s"}/hr`
+      : `${escapeHtml(entry.mode || "all")} / ${
+          Array.isArray(entry.owners) && entry.owners.length
+            ? escapeHtml(entry.owners.join(", "))
+            : "all"
+        }`;
   const repos = Number(entry.repos || 0);
   const passing = Number(entry.passingPrs || 0);
   const failing = Number(entry.failingPrs || 0);
@@ -2389,7 +2397,7 @@ function renderHistoryRow(entry) {
     <div class="row-main">
       <div class="row-title">
         <span class="history-ts">${ts}</span>
-        <span class="history-scope">${mode} / ${owners}</span>
+        <span class="history-scope">${scope}</span>
       </div>
       <div class="history-bars">
         ${bar(repos, "ink")}
