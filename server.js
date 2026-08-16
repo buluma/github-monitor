@@ -1185,8 +1185,8 @@ function parseBool(value, fallback = false) {
 }
 
 function parseJobs(value) {
-  const jobs = Number(value || process.env.OPEN_PRS_JOBS || 4);
-  if (!Number.isInteger(jobs) || jobs < 1) return 4;
+  const jobs = Number(value || process.env.OPEN_PRS_JOBS || 8);
+  if (!Number.isInteger(jobs) || jobs < 1) return 8;
   return Math.min(jobs, 16);
 }
 
@@ -2496,6 +2496,29 @@ async function fetchWorkflowRuns(repo, workflowId, params) {
   });
 }
 
+// One paginated /actions/runs fetch per repo, shared by the actions and CD lanes.
+// Cold scans used to pay 1 + (number of CD workflows) requests per repo for the
+// run list; this collapses that to a single request (up to `maxPages` pages of
+// 100). Runs come back newest-first, and grouping by workflow_id below preserves
+// that order for each workflow. The per-workflow fetchWorkflowRuns above remains
+// for any caller that needs an exact per-workflow window.
+async function fetchRecentRuns(repo, maxPages = 3) {
+  const cacheKey = `recent-runs:${repo}:${maxPages}`;
+  return cachedGithubValue(cacheKey, WORKFLOW_RUN_CACHE_TTL_MS, async () => {
+    const runs = [];
+    for (let page = 1; page <= maxPages; page += 1) {
+      const json = await githubRequest(`/repos/${repo}/actions/runs`, {
+        query: { per_page: 100, page },
+      });
+      const items = json?.workflow_runs || [];
+      if (!items.length) break;
+      runs.push(...items);
+      if (items.length < 100) break;
+    }
+    return runs;
+  });
+}
+
 async function fetchRecentDeploymentTargets(repo) {
   return cachedGithubValue(
     `deployment-targets:${repo}`,
@@ -3406,11 +3429,27 @@ async function fetchCdForRepo(repo) {
       running: markIgnoredRuns(running),
     };
   }
+  let recentRuns = [];
+  try {
+    recentRuns = await fetchRecentRuns(repo);
+  } catch {
+    return {
+      failed: markIgnoredRuns(failed),
+      finished,
+      running: markIgnoredRuns(running),
+    };
+  }
+  const runsByWorkflow = new Map();
+  for (const run of recentRuns) {
+    if (!run || run.workflow_id == null) continue;
+    if (!runsByWorkflow.has(run.workflow_id)) {
+      runsByWorkflow.set(run.workflow_id, []);
+    }
+    runsByWorkflow.get(run.workflow_id).push(run);
+  }
   for (const workflow of workflows) {
     try {
-      const recentWorkflowRuns = await fetchWorkflowRuns(repo, workflow.id, {
-        per_page: 20,
-      });
+      const recentWorkflowRuns = runsByWorkflow.get(workflow.id) || [];
       const completedRuns = recentWorkflowRuns.filter(
         (run) => run.status === "completed",
       );
@@ -3551,10 +3590,7 @@ async function fetchActionsForRepo(repo) {
     RUNNING_ACTION_CACHE_TTL_MS,
     async () => {
       try {
-        const json = await githubRequest(`/repos/${repo}/actions/runs`, {
-          query: { per_page: 20 },
-        });
-        const runs = json?.workflow_runs || [];
+        const runs = await fetchRecentRuns(repo);
         const running = runs
           .filter((run) => RUNNING_RUN_STATUSES.has(run.status))
           .filter((run) => !isCdWorkflowRun(run))
@@ -4649,6 +4685,9 @@ function sortByCreatedDesc(a, b) {
 }
 
 async function sendJson(res, status, body) {
+  // Guard against double-send (e.g. an error raised after a response was already
+  // written), which used to crash the process with ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return;
   res.writeHead(status, {
     ...SECURITY_HEADERS,
     "content-type": "application/json; charset=utf-8",
@@ -4833,12 +4872,27 @@ async function getHistorySummary() {
 const STATUS_CACHE_TTL_MS = 30 * 1000;
 const statusPayloadCache = new Map();
 let statusScanInFlight = null;
+let lastScanLog = null;
 
 async function runStatusScan(requestUrl, metrics, cacheKey) {
+  const startedAt = Date.now();
   return scanMetrics.run(metrics, async () => {
     const payload = await buildDashboardData(requestUrl);
     payload.history = await getHistorySummary();
     statusPayloadCache.set(cacheKey, { payload, at: Date.now() });
+    const quota = snapshotRateLimit(metrics);
+    const tightest = quota.tightest || {};
+    lastScanLog = {
+      ts: new Date().toISOString(),
+      mode: payload.options?.mode || "all",
+      repos: payload.summary?.repos ?? 0,
+      durationMs: Date.now() - startedAt,
+      requests: metrics.requestCount,
+      conditionalHits: metrics.conditionalHits,
+      quotaRemaining: tightest.remaining ?? null,
+      quotaLimit: tightest.limit ?? null,
+    };
+    console.log(`[scan] ${JSON.stringify(lastScanLog)}`);
     return payload;
   });
 }
@@ -4964,6 +5018,24 @@ const server = http.createServer(async (req, res) => {
       await sendJson(res, 200, { ok: true });
       return;
     }
+    if (requestUrl.pathname === "/api/diagnostics") {
+      if (req.method !== "GET") {
+        throw new HttpError(405, "Method not allowed");
+      }
+      const account = await getAccount().catch(() => null);
+      await sendJson(res, 200, {
+        pid: process.pid,
+        uptimeMs: Math.round(process.uptime() * 1000),
+        memory: process.memoryUsage(),
+        authMode: APP_AUTH_ENABLED ? "app" : "pat",
+        account,
+        etagCacheEntries: etagCache.size,
+        githubValueCacheEntries: githubValueCache.size,
+        statusPayloadCacheEntries: statusPayloadCache.size,
+        lastScan: lastScanLog,
+      });
+      return;
+    }
     if (requestUrl.pathname === "/api/history/scans") {
       const since = requestUrl.searchParams.get("since");
       const entries = await readHistoryFiles(since);
@@ -5002,6 +5074,15 @@ if (isMain) {
     scheduleDependabotQueueScan(0);
   });
 }
+
+// Last-resort guards: log loudly and keep serving instead of letting a stray
+// async error take the whole dashboard down.
+process.on("uncaughtException", (error) => {
+  console.error(`[fatal:uncaughtException] ${error?.stack || error}`);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error(`[fatal:unhandledRejection] ${reason?.stack || reason}`);
+});
 
 export {
   SECURITY_HEADERS,
