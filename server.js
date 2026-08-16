@@ -690,9 +690,13 @@ await hydrateCachesFromDb();
 // Drop history older than the retention window once at startup, then keep it
 // trimmed on an hourly cadence so the store stays bounded.
 await pruneOldHistory().catch(() => {});
-setInterval(() => {
+// Hourly trim. unref() so the timer never keeps the process alive on its own —
+// the HTTP listener already does that for the running server, and in test runs
+// (npm test -> node --test) a referenced timer would hang the suite from exiting.
+const pruneTimer = setInterval(() => {
   pruneOldHistory().catch(() => {});
 }, 60 * 60 * 1000);
+pruneTimer.unref();
 
 function historyEnabled() {
   return process.env.HISTORY_ENABLED === "1";
