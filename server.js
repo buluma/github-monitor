@@ -700,8 +700,8 @@ async function ensureHistoryDir() {
 }
 
 async function appendHistorySnapshot(snapshot) {
-  insertHistorySnapshotDb(snapshot);
   if (!historyEnabled()) return;
+  insertHistorySnapshotDb(snapshot);
   try {
     const dir = await ensureHistoryDir();
     if (!dir) return;
@@ -717,11 +717,11 @@ async function appendHistorySnapshot(snapshot) {
 }
 
 async function readHistoryFiles(since) {
+  if (!historyEnabled()) return [];
   const dbEntries = getHistorySnapshotsDb(since);
   if (dbEntries && dbEntries.length > 0) {
     return dbEntries;
   }
-  if (!historyEnabled()) return [];
   const base = historyBasePath();
   const cutoff = since
     ? new Date(since).getTime()
