@@ -2,7 +2,7 @@ import http from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { createSign } from "node:crypto";
-import { readFile, stat, mkdir, readdir, appendFile, cp, writeFile } from "node:fs/promises";
+import { readFile, stat, mkdir, readdir, appendFile, cp, writeFile, rm } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import {
   getDbPath,
   insertHistorySnapshotDb,
   getHistorySnapshotsDb,
+  pruneHistorySnapshotsDb,
   migrateJsonlHistory,
   getClientStateDb,
   updateClientStateDb,
@@ -19,12 +20,16 @@ import {
   saveEtagCacheDb,
   loadGithubValueCacheDb,
   saveGithubValueCacheDb,
+  pruneExpiredValueCacheDb,
+  pruneEtagCacheDb,
+  vacuumDb,
   loadInstallationTokensDb,
   saveInstallationTokenDb,
   loadAutoMergeCandidatesDb,
   saveAutoMergeCandidateDb,
   deleteAutoMergeCandidateDb,
   saveStatusPayloadDb,
+  loadStatusPayloadDb,
   loadStatusPayloadsDb,
 } from "./db.js";
 
@@ -682,6 +687,13 @@ async function hydrateCachesFromDb() {
 
 await hydrateCachesFromDb();
 
+// Drop history older than the retention window once at startup, then keep it
+// trimmed on an hourly cadence so the store stays bounded.
+await pruneOldHistory().catch(() => {});
+setInterval(() => {
+  pruneOldHistory().catch(() => {});
+}, 60 * 60 * 1000);
+
 function historyEnabled() {
   return process.env.HISTORY_ENABLED === "1";
 }
@@ -693,7 +705,7 @@ function historyBasePath() {
   );
 }
 const HISTORY_MAX_FILE_BYTES = 50 * 1024 * 1024;
-const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 function isEtagCacheEnabled() {
   return !ETAG_CACHE_DISABLED;
@@ -774,6 +786,62 @@ async function readHistoryFiles(since) {
   return entries.sort((a, b) =>
     String(a.ts || "").localeCompare(String(b.ts || "")),
   );
+}
+
+// Keep only the last HISTORY_RETENTION_MS of history: drop old DB snapshot rows
+// and trim (or delete) the on-disk jsonl files so the store stops growing.
+async function pruneOldHistory() {
+  if (!historyEnabled()) return;
+  const cutoff = Date.now() - HISTORY_RETENTION_MS;
+  const cutoffIso = new Date(cutoff).toISOString();
+  try {
+    let removed = 0;
+    // Drop stale API caches so the DB stops growing unbounded. VACUUM returns
+    // the freed pages to the OS (SQLite doesn't shrink files on DELETE).
+    removed += pruneHistorySnapshotsDb(cutoffIso);
+    removed += pruneExpiredValueCacheDb();
+    removed += pruneEtagCacheDb();
+    if (removed > 0) vacuumDb();
+
+    const base = historyBasePath();
+    const years = await readdir(base).catch(() => []);
+    for (const year of years) {
+      const yearDir = join(base, year);
+      const s = await stat(yearDir).catch(() => null);
+      if (!s?.isDirectory()) continue;
+      const months = await readdir(yearDir).catch(() => []);
+      for (const month of months) {
+        const filePath = join(yearDir, month);
+        const fileStat = await stat(filePath).catch(() => null);
+        if (!fileStat?.isFile() || !filePath.endsWith(".jsonl")) continue;
+        if (fileStat.mtimeMs < cutoff) {
+          // Every entry in this file predates the cutoff — drop the whole file.
+          await rm(filePath, { force: true }).catch(() => {});
+          continue;
+        }
+        // Current/partial month: rewrite keeping only lines still within range.
+        const text = await readFile(filePath, "utf8").catch(() => "");
+        const fresh = [];
+        for (const line of text.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const entry = JSON.parse(trimmed);
+            const ts = new Date(entry.ts || 0).getTime();
+            if (Number.isFinite(ts) && ts >= cutoff) fresh.push(trimmed);
+            else if (!Number.isFinite(ts)) fresh.push(trimmed);
+          } catch {
+            // Keep unparseable lines rather than silently lose data.
+            fresh.push(trimmed);
+          }
+        }
+        const next = fresh.join("\n") + (fresh.length ? "\n" : "");
+        if (next !== text) await writeFile(filePath, next, "utf8").catch(() => {});
+      }
+    }
+  } catch {
+    // Best-effort pruning; never block the dashboard on disk errors.
+  }
 }
 
 function summarizeHistory(entries, bucketMs = 60 * 60 * 1000) {
@@ -4999,7 +5067,12 @@ async function getHistorySummary() {
 // scan promise. Serving these makes page reloads (and duplicate tab refreshes)
 // show the most recent data instantly instead of re-scanning GitHub, and keeps
 // the dashboard from going empty when a fresh scan fails.
-const STATUS_CACHE_TTL_MS = 30 * 1000;
+const STATUS_CACHE_TTL_MS = 60 * 1000;
+// How stale a persisted (DB) status payload may be before we stop serving it on
+// a reload and fall back to a foreground scan. 2 minutes: long enough that a
+// reload shows instant last-known data instead of re-scanning GitHub, short
+// enough that the background refresh keeps the dashboard current.
+const STATUS_CACHE_SERVE_MAX_AGE_MS = 2 * 60 * 1000;
 // How old a persisted payload can be before we skip seeding the in-memory
 // cache from it on startup. 15 minutes — old enough to cover a server restart
 // mid-scan cycle, fresh enough not to show very stale data.
@@ -5044,6 +5117,30 @@ const server = http.createServer(async (req, res) => {
           ...cached.payload,
           cached: true,
           cachedAgeMs: Date.now() - cached.at,
+        });
+        return;
+      }
+      // In-memory entry is stale or absent. If we have a recently persisted
+      // payload in the DB, serve it instantly and refresh it in the background
+      // so a reload never blocks on a full GitHub re-scan.
+      const persisted = loadStatusPayloadDb(cacheKey);
+      if (
+        persisted &&
+        Date.now() - persisted.cachedAt <= STATUS_CACHE_SERVE_MAX_AGE_MS &&
+        !statusScanInFlight
+      ) {
+        statusScanInFlight = {
+          key: cacheKey,
+          promise: runStatusScan(requestUrl, createScanMetrics(), cacheKey).finally(
+            () => {
+              statusScanInFlight = null;
+            },
+          ),
+        };
+        await sendJson(res, 200, {
+          ...persisted.payload,
+          cached: true,
+          cachedAgeMs: Date.now() - persisted.cachedAt,
         });
         return;
       }
