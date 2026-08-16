@@ -112,8 +112,11 @@ test("workflow rows become stale only after four hours", { skip }, async () => {
     assert.equal(await rows.count(), 2);
     assert.equal(await rows.filter({ hasText: "CI run 101" }).getAttribute("class"), "row");
     assert.match(await rows.filter({ hasText: "CI run 102" }).getAttribute("class"), /row-stale/);
-    assert.match(await rows.filter({ hasText: "CI run 101" }).locator(".phase-pill").innerText(), /^Workflow running 3h 55m/);
-    assert.match(await rows.filter({ hasText: "CI run 102" }).locator(".phase-pill").innerText(), /^Stale Workflow running 4h 5m/);
+    // textContent (not innerText): rows now carry content-visibility: auto, so
+    // off-screen rows are intentionally not rendered and innerText would return
+    // empty for them. The assertions target the row's content, not layout.
+    assert.match(await rows.filter({ hasText: "CI run 101" }).locator(".phase-pill").textContent(), /^Workflow running 3h 55m/);
+    assert.match(await rows.filter({ hasText: "CI run 102" }).locator(".phase-pill").textContent(), /^Stale Workflow running 4h 5m/);
   } finally {
     await browser.close();
   }

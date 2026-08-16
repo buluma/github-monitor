@@ -1992,6 +1992,33 @@ button.metric.active .metric-dot {
   text-align: center;
 }
 
+/* —————————————————————— SCALE —————————————————————— */
+/* With 600+ repos some lanes render hundreds of rows. content-visibility lets
+   the browser skip layout/paint for rows outside the viewport so scrolling
+   stays smooth, and contain-intrinsic-size keeps the scrollbar estimate stable
+   while offscreen rows are skipped (auto remembers each row's last size). */
+.row,
+.cd-card,
+.trace-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
+.history-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+.rendering-note {
+  padding: 10px 14px;
+  color: var(--muted-strong);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-style: italic;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
 /* —————————————————————— ANIMATIONS —————————————————————— */
 @keyframes spin {
   to { transform: rotate(360deg); }

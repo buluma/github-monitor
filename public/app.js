@@ -2087,11 +2087,79 @@ function render() {
     : filtered.filter((row) => !rowIsDismissed(row));
   syncFilterUI(rows.length, all.length);
 
-  const body = rows.length
-    ? rows.map((row) => renderRow(row, state.view, view)).join("")
-    : renderEmptyState(view, all.length, data);
-  const dismissBar = renderDismissBar(dismissedCount, activeDismissable);
-  els.content.innerHTML = `${state.view === "pipelineTraces" ? renderTraceFilterBar(data) : ""}${dismissBar}${body}`;
+  const chromeHtml = `${state.view === "pipelineTraces" ? renderTraceFilterBar(data) : ""}${renderDismissBar(dismissedCount, activeDismissable)}`;
+  paintList(rows, view, all.length, data, chromeHtml);
+}
+
+// —————————————————————— PROGRESSIVE LIST RENDER ——————————————————————
+// Building a whole lane as one innerHTML string stalls the main thread once a
+// view holds hundreds of rows (663 repos and growing). Instead the row HTML is
+// inserted in small batches across animation frames, so the page stays
+// interactive while a big list fills in. The first batch is inserted
+// synchronously so small lanes render exactly as before, and a generation token
+// cancels stale batches whenever a newer render starts (filter keystroke,
+// refresh, view switch, dismiss toggle). Row events are delegated on
+// #content, so batches added after the fact behave identically.
+const RENDER_CHUNK_ROWS = 40;
+const RENDER_CHUNK_MS = 10;
+let renderGeneration = 0;
+let renderTimer = null;
+
+function paintList(rows, view, allCount, data, chromeHtml) {
+  renderGeneration += 1;
+  const generation = renderGeneration;
+  if (renderTimer) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+
+  els.content.innerHTML = chromeHtml;
+
+  if (!rows.length) {
+    els.content.insertAdjacentHTML(
+      "beforeend",
+      renderEmptyState(view, allCount, data),
+    );
+    return;
+  }
+
+  const note = document.createElement("div");
+  note.className = "rendering-note";
+  note.setAttribute("aria-live", "polite");
+
+  let index = 0;
+  const batchHtml = (start, end) =>
+    rows
+      .slice(start, end)
+      .map((row) => renderRow(row, state.view, view))
+      .join("");
+
+  // First batch synchronously: small lanes keep today's exact behavior.
+  els.content.insertAdjacentHTML("beforeend", batchHtml(0, RENDER_CHUNK_ROWS));
+  index += Math.min(RENDER_CHUNK_ROWS, rows.length);
+  if (index >= rows.length) return; // small lane: already complete
+
+  els.content.appendChild(note);
+  note.textContent = `Rendering ${rows.length - index} more rows…`;
+
+  const step = () => {
+    if (generation !== renderGeneration) return; // superseded, drop quietly
+    const batch = rows.slice(index, index + RENDER_CHUNK_ROWS);
+    index += batch.length;
+    const template = document.createElement("template");
+    template.innerHTML = batch
+      .map((row) => renderRow(row, state.view, view))
+      .join("");
+    els.content.insertBefore(template.content, note);
+    if (index < rows.length) {
+      note.textContent = `Rendering ${rows.length - index} more rows…`;
+      renderTimer = setTimeout(step, RENDER_CHUNK_MS);
+    } else {
+      note.remove();
+      renderTimer = null;
+    }
+  };
+  renderTimer = setTimeout(step, RENDER_CHUNK_MS);
 }
 
 // Returns stable dismiss keys for a dismissable row, else an empty array.
@@ -3662,10 +3730,15 @@ document.addEventListener("click", (event) => {
   closeInbox();
 });
 
+// Debounce filter keystrokes: each one previously rebuilt the whole lane, and
+// with hundreds of rows the repeated chunked rebuilds would thrash. A short
+// debounce coalesces bursts of typing into a single render.
+let filterRenderTimer = null;
 els.filter.addEventListener("input", (event) => {
   state.filter = event.target.value;
   persist();
-  render();
+  clearTimeout(filterRenderTimer);
+  filterRenderTimer = setTimeout(render, 120);
 });
 
 els.filterClear.addEventListener("click", () => {
