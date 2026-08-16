@@ -90,11 +90,11 @@ test("SQLite Persistence operations", async (t) => {
 
   await t.test("Installation tokens CRUD", async () => {
     const expires = Date.now() + 3600000;
-    saveInstallationTokenDb("my-org", "ghs_secret123", expires);
+    saveInstallationTokenDb("my-org", "dummy_token_secret123", expires);
     const tokens = loadInstallationTokensDb();
     assert.equal(tokens.length, 1);
     assert.equal(tokens[0].owner, "my-org");
-    assert.equal(tokens[0].token, "ghs_secret123");
+    assert.equal(tokens[0].token, "dummy_token_secret123");
   });
 
   await t.test("Auto-merge candidates CRUD", async () => {
