@@ -24,6 +24,8 @@ import {
   loadAutoMergeCandidatesDb,
   saveAutoMergeCandidateDb,
   deleteAutoMergeCandidateDb,
+  saveStatusPayloadDb,
+  loadStatusPayloadsDb,
 } from "./db.js";
 
 const isMain =
@@ -661,6 +663,18 @@ async function hydrateCachesFromDb() {
     if (historyEnabled()) {
       migrateJsonlHistory(historyBasePath()).catch(() => {});
     }
+
+    // Seed the in-memory status payload cache from DB so that the first page
+    // load after a server restart returns data immediately instead of scanning.
+    const statusRows = loadStatusPayloadsDb();
+    for (const r of statusRows) {
+      // Only seed entries younger than STATUS_CACHE_SEED_MAX_AGE_MS to avoid
+      // showing very stale data. The stale banner will appear but at least the
+      // dashboard is not blank.
+      if (Date.now() - r.cachedAt <= STATUS_CACHE_SEED_MAX_AGE_MS) {
+        statusPayloadCache.set(r.query, { payload: r.payload, at: r.cachedAt });
+      }
+    }
   } catch (err) {
     // Best-effort cache hydration
   }
@@ -1133,8 +1147,8 @@ function recommendRefresh(summary, options, rateLimit) {
   const problemCount = summary.failingPrs + summary.failedCd;
 
   // With a fixed baseline or minimum floor of 15 minutes (900s):
-  let intervalSeconds = 900;
-  // let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
+  // let intervalSeconds = 600;
+  let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
 
   if (options.mode === "all") intervalSeconds += 60;
   if (options.includeCd) intervalSeconds += 60;
@@ -4986,6 +5000,10 @@ async function getHistorySummary() {
 // show the most recent data instantly instead of re-scanning GitHub, and keeps
 // the dashboard from going empty when a fresh scan fails.
 const STATUS_CACHE_TTL_MS = 30 * 1000;
+// How old a persisted payload can be before we skip seeding the in-memory
+// cache from it on startup. 15 minutes — old enough to cover a server restart
+// mid-scan cycle, fresh enough not to show very stale data.
+const STATUS_CACHE_SEED_MAX_AGE_MS = 15 * 60 * 1000;
 const statusPayloadCache = new Map();
 let statusScanInFlight = null;
 let lastScanLog = null;
@@ -4996,6 +5014,7 @@ async function runStatusScan(requestUrl, metrics, cacheKey) {
     const payload = await buildDashboardData(requestUrl);
     payload.history = await getHistorySummary();
     statusPayloadCache.set(cacheKey, { payload, at: Date.now() });
+    saveStatusPayloadDb(cacheKey, payload);
     const quota = snapshotRateLimit(metrics);
     const tightest = quota.tightest || {};
     lastScanLog = {

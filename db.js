@@ -1,3 +1,4 @@
+// DB Sits at /Users/shadowwalker/.local/share/github-monitor/github-monitor.db
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
@@ -410,5 +411,41 @@ export function deleteAutoMergeCandidateDb(repo, number) {
     stmt.run(repo, number);
   } catch {
     // Best effort
+  }
+}
+
+// ----------------------------------------------------
+// Status Payload Cache Helpers
+// ----------------------------------------------------
+
+/** Persist a full /api/status payload keyed by query string. */
+export function saveStatusPayloadDb(query, payload) {
+  if (!dbInstance) return;
+  try {
+    const stmt = dbInstance.prepare(`
+      INSERT INTO status_payload_cache (query, payload, cached_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(query) DO UPDATE SET payload = excluded.payload, cached_at = excluded.cached_at
+    `);
+    stmt.run(query, JSON.stringify(payload), Date.now());
+  } catch {
+    // Best effort
+  }
+}
+
+/** Load all persisted status payloads, newest first. Returns [{query, payload, cachedAt}]. */
+export function loadStatusPayloadsDb() {
+  if (!dbInstance) return [];
+  try {
+    const rows = dbInstance
+      .prepare(`SELECT query, payload, cached_at FROM status_payload_cache ORDER BY cached_at DESC`)
+      .all();
+    return rows.map((r) => ({
+      query: r.query,
+      payload: JSON.parse(r.payload),
+      cachedAt: r.cached_at,
+    }));
+  } catch {
+    return [];
   }
 }
