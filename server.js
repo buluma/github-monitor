@@ -606,7 +606,11 @@ const ETAG_CACHEABLE_METHODS = new Set(["GET", "HEAD"]);
 async function hydrateCachesFromDb() {
   await initDb();
   try {
-    const etagRows = loadEtagCacheDb();
+    // Load and hydrate etag cache with timeout
+    const etagRows = await loadEtagCacheDb().catch(err => {
+      console.error('Failed to load etag cache:', err);
+      return [];
+    });
     for (const r of etagRows) {
       // No `body`: restored entries issue conditional requests but don't hold the
       // cached payload in memory, so a 304 for them re-fetches the body once.
@@ -617,7 +621,11 @@ async function hydrateCachesFromDb() {
       });
     }
 
-    const valRows = loadGithubValueCacheDb();
+    // Load and hydrate value cache with timeout
+    const valRows = await loadGithubValueCacheDb().catch(err => {
+      console.error('Failed to load value cache:', err);
+      return [];
+    });
     const now = Date.now();
     for (const r of valRows) {
       if (r.expires_at > now) {
@@ -634,7 +642,11 @@ async function hydrateCachesFromDb() {
       }
     }
 
-    const tokenRows = loadInstallationTokensDb();
+    // Load and hydrate installation tokens with timeout
+    const tokenRows = await loadInstallationTokensDb().catch(err => {
+      console.error('Failed to load installation tokens:', err);
+      return [];
+    });
     for (const r of tokenRows) {
       if (r.expires_at > now) {
         installationTokensByOwner.set(r.owner, {
@@ -644,7 +656,11 @@ async function hydrateCachesFromDb() {
       }
     }
 
-    const autoMergeRows = loadAutoMergeCandidatesDb();
+    // Load and hydrate auto-merge candidates with timeout
+    const autoMergeRows = await loadAutoMergeCandidatesDb().catch(err => {
+      console.error('Failed to load auto-merge candidates:', err);
+      return [];
+    });
     for (const r of autoMergeRows) {
       autoMergeState.candidates.set(`${r.repo}#${r.number}`, {
         repo: r.repo,
@@ -657,13 +673,17 @@ async function hydrateCachesFromDb() {
       });
     }
 
+    // Migrate history if enabled
     if (historyEnabled()) {
       migrateJsonlHistory(historyBasePath()).catch(() => {});
     }
 
     // Seed the in-memory status payload cache from DB so that the first page
     // load after a server restart returns data immediately instead of scanning.
-    const statusRows = loadStatusPayloadsDb();
+    const statusRows = await loadStatusPayloadsDb().catch(err => {
+      console.error('Failed to load status payloads:', err);
+      return [];
+    });
     for (const r of statusRows) {
       // Only seed entries younger than STATUS_CACHE_SEED_MAX_AGE_MS to avoid
       // showing very stale data. The stale banner will appear but at least the
@@ -673,7 +693,7 @@ async function hydrateCachesFromDb() {
       }
     }
   } catch (err) {
-    // Best-effort cache hydration
+    // Best-effort cache hydration - any failure should not crash the server
   }
 }
 
