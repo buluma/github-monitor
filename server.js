@@ -7,7 +7,8 @@ import { extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 try {
   process.loadEnvFile(join(__dirname, ".env"));
@@ -19,7 +20,8 @@ const port = Number(process.env.PORT || 4177);
 const githubApiBase = "https://api.github.com";
 const githubGraphqlUrl = "https://api.github.com/graphql";
 const GITHUB_APP_ID = process.env.GITHUB_APP_ID || "";
-const GITHUB_APP_PRIVATE_KEY_PATH = process.env.GITHUB_APP_PRIVATE_KEY_PATH || "";
+const GITHUB_APP_PRIVATE_KEY_PATH =
+  process.env.GITHUB_APP_PRIVATE_KEY_PATH || "";
 const APP_AUTH_ENABLED = Boolean(GITHUB_APP_ID && GITHUB_APP_PRIVATE_KEY_PATH);
 let githubTokenPromise;
 const scanMetrics = new AsyncLocalStorage();
@@ -33,11 +35,11 @@ const SECURITY_HEADERS = {
     "object-src 'none'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
-    "form-action 'none'"
+    "form-action 'none'",
   ].join("; "),
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
-  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()"
+  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
 };
 
 const PR_SEARCH_GRAPHQL = `
@@ -159,7 +161,8 @@ const PR_BY_NUMBER_GRAPHQL = `
   }
 `;
 
-const CD_WORKFLOW_PATTERN = /(^|[^A-Za-z0-9])(cd|deploy|deployment|release|publish)([^A-Za-z0-9]|$)/i;
+const CD_WORKFLOW_PATTERN =
+  /(^|[^A-Za-z0-9])(cd|deploy|deployment|release|publish)([^A-Za-z0-9]|$)/i;
 const FAILED_ACTION_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 const FAILED_CD_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 const FINISHED_CD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -191,7 +194,7 @@ const PRODUCTION_TARGET_CODE_FILES = [
   "astro.config.mjs",
   "nuxt.config.js",
   "nuxt.config.ts",
-  "svelte.config.js"
+  "svelte.config.js",
 ];
 const QUOTA_SLOW_REMAINING = 200;
 const QUOTA_SLOW_RATIO = 0.15;
@@ -214,18 +217,47 @@ const DEPLOYMENT_TARGET_CACHE_TTL_MS = 10 * 60 * 1000;
 const PRODUCTION_TARGET_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MERGED_PR_CACHE_TTL_MS = 10 * 60 * 1000;
 const RECENT_COMMIT_CACHE_TTL_MS = 5 * 60 * 1000;
-const RUNNING_RUN_STATUSES = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
+const RUNNING_RUN_STATUSES = new Set([
+  "queued",
+  "in_progress",
+  "waiting",
+  "requested",
+  "pending",
+]);
 const DEPENDABOT_LOGIN = "dependabot[bot]";
 const DEPENDABOT_QUEUE_MAX_THRESHOLD = 5000;
-const DEPENDABOT_QUEUE_THRESHOLD = parseDependabotQueueThreshold(process.env.DEPENDABOT_QUEUE_THRESHOLD);
-const DEPENDABOT_QUEUE_OWNERS = parseOwners(process.env.DEPENDABOT_QUEUE_OWNERS);
+const DEPENDABOT_QUEUE_THRESHOLD = parseDependabotQueueThreshold(
+  process.env.DEPENDABOT_QUEUE_THRESHOLD,
+);
+const DEPENDABOT_QUEUE_OWNERS = parseOwners(
+  process.env.DEPENDABOT_QUEUE_OWNERS,
+);
 const DEPENDABOT_CLEANUP_COOLDOWN_MS = 5 * 60 * 1000;
 const DEPENDABOT_QUEUE_SCAN_MS = 60 * 1000;
 const DEPENDABOT_CLEANUP_JOBS = 4;
-const FAILED_RUN_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
+const FAILED_RUN_CONCLUSIONS = new Set([
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "startup_failure",
+]);
 const SKIPPED_RUN_CONCLUSIONS = new Set(["skipped"]);
-const FAILED_JOB_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
-const FAILED_CHECK_CONCLUSIONS = new Set(["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+const FAILED_JOB_CONCLUSIONS = new Set([
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "startup_failure",
+]);
+const FAILED_CHECK_CONCLUSIONS = new Set([
+  "FAILURE",
+  "ERROR",
+  "CANCELLED",
+  "TIMED_OUT",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+]);
 const RUNNING_DEPLOYMENT_STATES = new Set(["queued", "pending", "in_progress"]);
 const SUCCESSFUL_DEPLOYMENT_STATES = new Set(["success"]);
 const AUTO_MERGE_DELAY_MS = 15 * 1000;
@@ -244,7 +276,7 @@ const FAILURE_REASON_LABELS = {
   cancelled: "cancelled",
   timed_out: "timed out",
   action_required: "requires action",
-  startup_failure: "failed to start"
+  startup_failure: "failed to start",
 };
 
 class HttpError extends Error {
@@ -259,13 +291,13 @@ const autoMergeState = {
   options: {
     mode: "all",
     jobs: 4,
-    owners: []
+    owners: [],
   },
   candidates: new Map(),
   running: false,
   timer: null,
   lastScanAt: null,
-  lastError: ""
+  lastError: "",
 };
 
 const dependabotCleanupState = {
@@ -277,7 +309,7 @@ const dependabotCleanupState = {
   lastScanAt: null,
   lastCompletedAt: null,
   lastResult: null,
-  lastError: ""
+  lastError: "",
 };
 
 function sameAutoMergeOwners(a, b) {
@@ -295,7 +327,7 @@ function run(command, args, { timeoutMs = 120000 } = {}) {
     const child = spawn(command, args, {
       cwd: __dirname,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     let stdout = "";
@@ -333,9 +365,13 @@ async function getPatToken() {
     githubTokenPromise = (async () => {
       const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
       if (envToken) return envToken;
-      const token = (await run("gh", ["auth", "token"], { timeoutMs: 10000 })).trim();
+      const token = (
+        await run("gh", ["auth", "token"], { timeoutMs: 10000 })
+      ).trim();
       if (!token) {
-        throw new Error("Set GITHUB_TOKEN/GH_TOKEN or authenticate GitHub CLI with `gh auth login`.");
+        throw new Error(
+          "Set GITHUB_TOKEN/GH_TOKEN or authenticate GitHub CLI with `gh auth login`.",
+        );
       }
       return token;
     })();
@@ -376,15 +412,19 @@ function buildAppJwtPayload(appId, nowSeconds) {
   return {
     iat: nowSeconds - 60,
     exp: nowSeconds + 540,
-    iss: String(appId)
+    iss: String(appId),
   };
 }
 
 function signAppJwt({ appId, privateKey, nowSeconds }) {
   const header = { alg: "RS256", typ: "JWT" };
   const payload = buildAppJwtPayload(appId, nowSeconds);
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString("base64url");
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const encodedHeader = Buffer.from(JSON.stringify(header)).toString(
+    "base64url",
+  );
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
+    "base64url",
+  );
   const signingInput = `${encodedHeader}.${encodedPayload}`;
   const signer = createSign("RSA-SHA256");
   signer.update(signingInput);
@@ -414,10 +454,14 @@ async function loadAppPrivateKey() {
   try {
     const stats = await stat(resolvedPath);
     if ((stats.mode & 0o077) !== 0) {
-      console.warn(`[github-monitor] private key at ${resolvedPath} is readable by group/others; run: chmod 600 ${resolvedPath}`);
+      console.warn(
+        `[github-monitor] private key at ${resolvedPath} is readable by group/others; run: chmod 600 ${resolvedPath}`,
+      );
     }
   } catch (error) {
-    throw new Error(`GitHub App private key not found at ${resolvedPath}: ${error.message}`);
+    throw new Error(
+      `GitHub App private key not found at ${resolvedPath}: ${error.message}`,
+    );
   }
   cachedPrivateKey = await readFile(resolvedPath, "utf8");
   return cachedPrivateKey;
@@ -443,19 +487,23 @@ async function appAuthorizedRequest(url, init = {}) {
       authorization: `Bearer ${jwt}`,
       "user-agent": "github-monitor-local",
       "x-github-api-version": "2022-11-28",
-      ...(init.headers || {})
-    }
+      ...(init.headers || {}),
+    },
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`GitHub App request to ${url} failed (${response.status}): ${text}`);
+    throw new Error(
+      `GitHub App request to ${url} failed (${response.status}): ${text}`,
+    );
   }
   return response.json();
 }
 
 async function discoverInstallations() {
   if (installationsByOwner) return installationsByOwner;
-  const installations = await appAuthorizedRequest(`${githubApiBase}/app/installations?per_page=100`);
+  const installations = await appAuthorizedRequest(
+    `${githubApiBase}/app/installations?per_page=100`,
+  );
   const map = new Map();
   for (const inst of installations) {
     const owner = inst.account?.login;
@@ -463,7 +511,7 @@ async function discoverInstallations() {
     map.set(owner.toLowerCase(), {
       installationId: inst.id,
       accountLogin: owner,
-      accountType: inst.account.type
+      accountType: inst.account.type,
     });
   }
   installationsByOwner = map;
@@ -473,24 +521,31 @@ async function discoverInstallations() {
 async function mintInstallationToken(installationId) {
   const data = await appAuthorizedRequest(
     `${githubApiBase}/app/installations/${installationId}/access_tokens`,
-    { method: "POST" }
+    { method: "POST" },
   );
   return {
     token: data.token,
-    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000)
+    expiresAt: Math.floor(new Date(data.expires_at).getTime() / 1000),
   };
 }
 
 async function getInstallationToken(ownerHint) {
   const installations = await discoverInstallations();
   if (installations.size === 0) {
-    throw new Error("GitHub App has no installations. Install the app on at least one account.");
+    throw new Error(
+      "GitHub App has no installations. Install the app on at least one account.",
+    );
   }
   const lookupKey = ownerHint ? String(ownerHint).toLowerCase() : null;
   if (lookupKey && !installations.has(lookupKey)) {
-    throw new HttpError(403, `GitHub App is not installed for owner ${ownerHint}.`);
+    throw new HttpError(
+      403,
+      `GitHub App is not installed for owner ${ownerHint}.`,
+    );
   }
-  const installation = lookupKey ? installations.get(lookupKey) : installations.values().next().value;
+  const installation = lookupKey
+    ? installations.get(lookupKey)
+    : installations.values().next().value;
   const cacheKey = installation.accountLogin.toLowerCase();
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cached = installationTokensByOwner.get(cacheKey);
@@ -503,7 +558,9 @@ async function getInstallationToken(ownerHint) {
 }
 
 function githubUrl(path, query = {}) {
-  const url = path.startsWith("http") ? new URL(path) : new URL(path, githubApiBase);
+  const url = path.startsWith("http")
+    ? new URL(path)
+    : new URL(path, githubApiBase);
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, String(value));
@@ -520,7 +577,10 @@ function historyEnabled() {
 }
 
 function historyBasePath() {
-  return process.env.HISTORY_DIR || join(homedir(), ".local", "share", "github-monitor", "history");
+  return (
+    process.env.HISTORY_DIR ||
+    join(homedir(), ".local", "share", "github-monitor", "history")
+  );
 }
 const HISTORY_MAX_FILE_BYTES = 50 * 1024 * 1024;
 const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -549,7 +609,9 @@ async function appendHistorySnapshot(snapshot) {
     const dir = await ensureHistoryDir();
     if (!dir) return;
     const filePath = historyFilePath();
-    await mkdir(join(dir, String(new Date().getUTCFullYear())), { recursive: true });
+    await mkdir(join(dir, String(new Date().getUTCFullYear())), {
+      recursive: true,
+    });
     const line = JSON.stringify(snapshot) + "\n";
     await appendFile(filePath, line, "utf8");
   } catch {
@@ -560,7 +622,9 @@ async function appendHistorySnapshot(snapshot) {
 async function readHistoryFiles(since) {
   if (!historyEnabled()) return [];
   const base = historyBasePath();
-  const cutoff = since ? new Date(since).getTime() : Date.now() - HISTORY_RETENTION_MS;
+  const cutoff = since
+    ? new Date(since).getTime()
+    : Date.now() - HISTORY_RETENTION_MS;
   const entries = [];
   try {
     const years = await readdir(base).catch(() => []);
@@ -592,7 +656,9 @@ async function readHistoryFiles(since) {
   } catch {
     return [];
   }
-  return entries.sort((a, b) => String(a.ts || "").localeCompare(String(b.ts || "")));
+  return entries.sort((a, b) =>
+    String(a.ts || "").localeCompare(String(b.ts || "")),
+  );
 }
 
 function summarizeHistory(entries, bucketMs = 60 * 60 * 1000) {
@@ -602,27 +668,62 @@ function summarizeHistory(entries, bucketMs = 60 * 60 * 1000) {
     const ts = new Date(entry.ts || 0).getTime();
     if (!Number.isFinite(ts)) continue;
     const key = Math.floor(ts / bucketMs);
-    const current = buckets.get(key) || { ts: new Date(key * bucketMs).toISOString(), scans: 0, repos: 0, passingPrs: 0, failingPrs: 0, runningPrs: 0, runningCd: 0, finishedCd: 0, failedCd: 0, busyRunners: 0 };
+    const current = buckets.get(key) || {
+      ts: new Date(key * bucketMs).toISOString(),
+      scans: 0,
+      repos: 0,
+      passingPrs: 0,
+      failingPrs: 0,
+      runningPrs: 0,
+      runningCd: 0,
+      finishedCd: 0,
+      failedCd: 0,
+      busyRunners: 0,
+    };
     current.scans += 1;
     current.repos = Math.max(current.repos, Number(entry.repos) || 0);
-    current.passingPrs = Math.max(current.passingPrs, Number(entry.passingPrs) || 0);
-    current.failingPrs = Math.max(current.failingPrs, Number(entry.failingPrs) || 0);
-    current.runningPrs = Math.max(current.runningPrs, Number(entry.runningPrs) || 0);
-    current.runningCd = Math.max(current.runningCd, Number(entry.runningCd) || 0);
-    current.finishedCd = Math.max(current.finishedCd, Number(entry.finishedCd) || 0);
+    current.passingPrs = Math.max(
+      current.passingPrs,
+      Number(entry.passingPrs) || 0,
+    );
+    current.failingPrs = Math.max(
+      current.failingPrs,
+      Number(entry.failingPrs) || 0,
+    );
+    current.runningPrs = Math.max(
+      current.runningPrs,
+      Number(entry.runningPrs) || 0,
+    );
+    current.runningCd = Math.max(
+      current.runningCd,
+      Number(entry.runningCd) || 0,
+    );
+    current.finishedCd = Math.max(
+      current.finishedCd,
+      Number(entry.finishedCd) || 0,
+    );
     current.failedCd = Math.max(current.failedCd, Number(entry.failedCd) || 0);
-    current.busyRunners = Math.max(current.busyRunners, Number(entry.busyRunners) || 0);
+    current.busyRunners = Math.max(
+      current.busyRunners,
+      Number(entry.busyRunners) || 0,
+    );
     buckets.set(key, current);
   }
-  const sorted = [...buckets.values()].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
-  const totals = sorted.length ? {
-    scans: sorted.reduce((sum, b) => sum + b.scans, 0),
-    firstTs: sorted[0].ts,
-    lastTs: sorted[sorted.length - 1].ts,
-    avgRepos: Math.round(sorted.reduce((sum, b) => sum + b.repos, 0) / sorted.length),
-    peakFailingPrs: Math.max(...sorted.map((b) => b.failingPrs)),
-    peakRunningCd: Math.max(...sorted.map((b) => b.runningCd))
-  } : {};
+  const sorted = [...buckets.values()].sort((a, b) =>
+    String(a.ts).localeCompare(String(b.ts)),
+  );
+  const totals = sorted.length
+    ? {
+        scans: sorted.reduce((sum, b) => sum + b.scans, 0),
+        firstTs: sorted[0].ts,
+        lastTs: sorted[sorted.length - 1].ts,
+        avgRepos: Math.round(
+          sorted.reduce((sum, b) => sum + b.repos, 0) / sorted.length,
+        ),
+        peakFailingPrs: Math.max(...sorted.map((b) => b.failingPrs)),
+        peakRunningCd: Math.max(...sorted.map((b) => b.runningCd)),
+      }
+    : {};
   return { buckets: sorted, totals };
 }
 
@@ -652,17 +753,22 @@ function storeConditionalResponse(store, url, method, response, body) {
   return true;
 }
 
-async function githubRequest(path, { method = "GET", query = {}, body, ownerHint } = {}) {
+async function githubRequest(
+  path,
+  { method = "GET", query = {}, body, ownerHint } = {},
+) {
   const effectiveOwnerHint = ownerHint || extractOwnerFromPath(path);
-  const { token, installationKey } = await getGitHubToken({ ownerHint: effectiveOwnerHint });
+  const { token, installationKey } = await getGitHubToken({
+    ownerHint: effectiveOwnerHint,
+  });
   const url = githubUrl(path, query);
   const cacheKey = url.toString();
   const baseHeaders = {
-    "accept": "application/vnd.github+json",
-    "authorization": `Bearer ${token}`,
+    accept: "application/vnd.github+json",
+    authorization: `Bearer ${token}`,
     "content-type": "application/json",
     "user-agent": "github-monitor-local",
-    "x-github-api-version": "2022-11-28"
+    "x-github-api-version": "2022-11-28",
   };
   const headers = isEtagCacheEnabled()
     ? applyConditionalHeaders(baseHeaders, etagCache, cacheKey, method)
@@ -670,20 +776,29 @@ async function githubRequest(path, { method = "GET", query = {}, body, ownerHint
   const response = await fetch(url, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined
+    body: body ? JSON.stringify(body) : undefined,
   });
 
-  recordRateLimit(response, { conditional: response.status === 304, installationKey });
+  recordRateLimit(response, {
+    conditional: response.status === 304,
+    installationKey,
+  });
 
   if (isEtagCacheEnabled()) {
-    const cachedBody = takeCachedConditionalResponse(etagCache, cacheKey, method, response.status);
+    const cachedBody = takeCachedConditionalResponse(
+      etagCache,
+      cacheKey,
+      method,
+      response.status,
+    );
     if (cachedBody !== null) return cachedBody;
   }
 
   const text = await response.text();
   const json = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    const message = json?.message || text || `GitHub API returned ${response.status}`;
+    const message =
+      json?.message || text || `GitHub API returned ${response.status}`;
     throw new HttpError(response.status, message);
   }
   if (isEtagCacheEnabled()) {
@@ -696,7 +811,7 @@ function createScanMetrics() {
   return {
     startedAt: new Date().toISOString(),
     requestCount: 0,
-    conditionalHits: 0
+    conditionalHits: 0,
   };
 }
 
@@ -709,7 +824,10 @@ function resetObservedRateBuckets() {
   observedRateBuckets.clear();
 }
 
-function recordRateLimit(response, { conditional = false, installationKey = "pat" } = {}) {
+function recordRateLimit(
+  response,
+  { conditional = false, installationKey = "pat" } = {},
+) {
   const metrics = scanMetrics.getStore();
   if (metrics) {
     metrics.requestCount += 1;
@@ -721,7 +839,12 @@ function recordRateLimit(response, { conditional = false, installationKey = "pat
   const used = Number(response.headers.get("x-ratelimit-used"));
   const reset = Number(response.headers.get("x-ratelimit-reset"));
   const resource = response.headers.get("x-ratelimit-resource") || "core";
-  if (!Number.isFinite(limit) || !Number.isFinite(remaining) || !Number.isFinite(reset)) return;
+  if (
+    !Number.isFinite(limit) ||
+    !Number.isFinite(remaining) ||
+    !Number.isFinite(reset)
+  )
+    return;
 
   const resetAt = new Date(reset * 1000).toISOString();
   const key = `${resource}::${installationKey}`;
@@ -732,12 +855,16 @@ function recordRateLimit(response, { conditional = false, installationKey = "pat
     limit,
     remaining,
     used: Number.isFinite(used) ? used : null,
-    resetAt
+    resetAt,
   };
   // Within a single reset window, only ratchet `remaining` downward — never let a
   // stale out-of-order response bump it back up. After the reset window changes,
   // accept the fresh quota as the new baseline.
-  if (previous && previous.resetAt === bucket.resetAt && previous.remaining < remaining) {
+  if (
+    previous &&
+    previous.resetAt === bucket.resetAt &&
+    previous.remaining < remaining
+  ) {
     bucket.remaining = previous.remaining;
   }
   observedRateBuckets.set(key, bucket);
@@ -748,7 +875,10 @@ function snapshotRateLimit(metrics) {
     const ratioA = a.remaining / Math.max(1, a.limit);
     const ratioB = b.remaining / Math.max(1, b.limit);
     if (ratioA !== ratioB) return ratioA - ratioB;
-    return a.resource.localeCompare(b.resource) || a.installationKey.localeCompare(b.installationKey);
+    return (
+      a.resource.localeCompare(b.resource) ||
+      a.installationKey.localeCompare(b.installationKey)
+    );
   });
   const tightest = buckets[0] || null;
   const resources = [];
@@ -764,14 +894,15 @@ function snapshotRateLimit(metrics) {
     resources,
     buckets,
     bucketCount: buckets.length,
-    tightest
+    tightest,
   };
 }
 
 async function cachedGithubValue(key, ttlMs, loader) {
   const now = Date.now();
   const cached = githubValueCache.get(key);
-  if (cached?.value !== undefined && cached.expiresAt > now) return cached.value;
+  if (cached?.value !== undefined && cached.expiresAt > now)
+    return cached.value;
   if (cached?.promise) return cached.promise;
 
   const promise = Promise.resolve()
@@ -779,7 +910,7 @@ async function cachedGithubValue(key, ttlMs, loader) {
     .then((value) => {
       githubValueCache.set(key, {
         value,
-        expiresAt: Date.now() + ttlMs
+        expiresAt: Date.now() + ttlMs,
       });
       return value;
     })
@@ -790,7 +921,7 @@ async function cachedGithubValue(key, ttlMs, loader) {
 
   githubValueCache.set(key, {
     promise,
-    expiresAt: now + Math.min(ttlMs, 30 * 1000)
+    expiresAt: now + Math.min(ttlMs, 30 * 1000),
   });
   return promise;
 }
@@ -803,19 +934,21 @@ function buildDashboardWarnings(rateLimit, summary, options) {
 
   if (quota.status === "exhausted") {
     warnings.push(
-      `GitHub ${tightest.resource} API quota is exhausted until ${new Date(quota.resetAt).toLocaleTimeString()}; refresh is paused.`
+      `GitHub ${tightest.resource} API quota is exhausted until ${new Date(quota.resetAt).toLocaleTimeString()}; refresh is paused.`,
     );
   } else if (quota.blocked) {
     warnings.push(
-      `GitHub ${tightest.resource} API quota is low (${tightest.remaining}/${tightest.limit}); refresh is paused until ${new Date(quota.resetAt).toLocaleTimeString()}.`
+      `GitHub ${tightest.resource} API quota is low (${tightest.remaining}/${tightest.limit}); refresh is paused until ${new Date(quota.resetAt).toLocaleTimeString()}.`,
     );
   } else if (options.includeCd && quota.status === "watch") {
     warnings.push(
-      `GitHub ${tightest.resource} API quota is getting tight (${tightest.remaining}/${tightest.limit}); refresh cadence has slowed.`
+      `GitHub ${tightest.resource} API quota is getting tight (${tightest.remaining}/${tightest.limit}); refresh cadence has slowed.`,
     );
   }
   if (options.includeCd && summary.finishedCd === 0 && quota.blocked) {
-    warnings.push("Finished CD can appear empty when GitHub rate limits the workflow scan.");
+    warnings.push(
+      "Finished CD can appear empty when GitHub rate limits the workflow scan.",
+    );
   }
   return warnings;
 }
@@ -830,26 +963,62 @@ function quotaState(rateLimit) {
   const retryAfterSeconds = secondsUntil(resetAt) + 30;
   const absoluteApplies = limit >= QUOTA_ABSOLUTE_LIMIT_FLOOR;
   if (remaining <= 0) {
-    return { status: "exhausted", blocked: true, tightest, resetAt, retryAfterSeconds };
+    return {
+      status: "exhausted",
+      blocked: true,
+      tightest,
+      resetAt,
+      retryAfterSeconds,
+    };
   }
-  if (remainingRatio < QUOTA_SLOW_RATIO || (absoluteApplies && remaining < QUOTA_SLOW_REMAINING)) {
-    return { status: "low", blocked: true, tightest, resetAt, retryAfterSeconds };
+  if (
+    remainingRatio < QUOTA_SLOW_RATIO ||
+    (absoluteApplies && remaining < QUOTA_SLOW_REMAINING)
+  ) {
+    return {
+      status: "low",
+      blocked: true,
+      tightest,
+      resetAt,
+      retryAfterSeconds,
+    };
   }
-  if (remainingRatio < QUOTA_WARN_RATIO || (absoluteApplies && remaining < QUOTA_WARN_REMAINING)) {
-    return { status: "watch", blocked: false, tightest, resetAt, retryAfterSeconds: 0 };
+  if (
+    remainingRatio < QUOTA_WARN_RATIO ||
+    (absoluteApplies && remaining < QUOTA_WARN_REMAINING)
+  ) {
+    return {
+      status: "watch",
+      blocked: false,
+      tightest,
+      resetAt,
+      retryAfterSeconds: 0,
+    };
   }
-  return { status: "ok", blocked: false, tightest, resetAt, retryAfterSeconds: 0 };
+  return {
+    status: "ok",
+    blocked: false,
+    tightest,
+    resetAt,
+    retryAfterSeconds: 0,
+  };
 }
 
 function currentQuotaIsBlocked() {
-  const quota = quotaState(snapshotRateLimit(scanMetrics.getStore() || createScanMetrics()));
+  const quota = quotaState(
+    snapshotRateLimit(scanMetrics.getStore() || createScanMetrics()),
+  );
   if (!quota.blocked) return false;
   const resetAt = new Date(quota.resetAt || 0).getTime();
   return !Number.isFinite(resetAt) || resetAt > Date.now();
 }
 
 function recommendRefresh(summary, options, rateLimit) {
-  const activeCount = summary.runningPrs + summary.runningCd + summary.runningDeployments + summary.busyRunners;
+  const activeCount =
+    summary.runningPrs +
+    summary.runningCd +
+    summary.runningDeployments +
+    summary.busyRunners;
   const problemCount = summary.failingPrs + summary.failedCd;
   let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
 
@@ -867,7 +1036,10 @@ function recommendRefresh(summary, options, rateLimit) {
     }
   }
 
-  intervalSeconds = Math.max(45, Math.min(intervalSeconds, quota.blocked ? 7200 : 3900));
+  intervalSeconds = Math.max(
+    45,
+    Math.min(intervalSeconds, quota.blocked ? 7200 : 3900),
+  );
   return {
     intervalSeconds,
     nextRefreshAt: new Date(Date.now() + intervalSeconds * 1000).toISOString(),
@@ -879,8 +1051,8 @@ function recommendRefresh(summary, options, rateLimit) {
       remaining: tightest?.remaining ?? null,
       limit: tightest?.limit ?? null,
       resetAt: quota.resetAt || "",
-      retryAfterSeconds: quota.retryAfterSeconds || 0
-    }
+      retryAfterSeconds: quota.retryAfterSeconds || 0,
+    },
   };
 }
 
@@ -905,7 +1077,7 @@ async function githubGraphql(query, variables, { ownerHint } = {}) {
   const json = await githubRequest(githubGraphqlUrl, {
     method: "POST",
     body: { query, variables },
-    ownerHint
+    ownerHint,
   });
   if (json?.errors?.length) {
     throw new Error(json.errors.map((error) => error.message).join("; "));
@@ -913,11 +1085,26 @@ async function githubGraphql(query, variables, { ownerHint } = {}) {
   return json;
 }
 
-async function githubRestPage(path, page, perPage = 100, query = {}, ownerHint) {
-  return githubRequest(path, { query: { ...query, per_page: perPage, page }, ownerHint });
+async function githubRestPage(
+  path,
+  page,
+  perPage = 100,
+  query = {},
+  ownerHint,
+) {
+  return githubRequest(path, {
+    query: { ...query, per_page: perPage, page },
+    ownerHint,
+  });
 }
 
-async function githubRestAll(path, pickItems, perPage = 100, query = {}, ownerHint) {
+async function githubRestAll(
+  path,
+  pickItems,
+  perPage = 100,
+  query = {},
+  ownerHint,
+) {
   const results = [];
   for (let page = 1; page <= 50; page += 1) {
     const json = await githubRestPage(path, page, perPage, query, ownerHint);
@@ -929,12 +1116,26 @@ async function githubRestAll(path, pickItems, perPage = 100, query = {}, ownerHi
   return results;
 }
 
-async function githubRestAllWithinQuota(path, pickItems, perPage = 100, query = {}, ownerHint) {
+async function githubRestAllWithinQuota(
+  path,
+  pickItems,
+  perPage = 100,
+  query = {},
+  ownerHint,
+) {
   const results = [];
   for (let page = 1; page <= 50; page += 1) {
-    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for Dependabot cleanup.");
+    if (currentQuotaIsBlocked())
+      throw new HttpError(
+        429,
+        "GitHub API quota is too low for Dependabot cleanup.",
+      );
     const json = await githubRestPage(path, page, perPage, query, ownerHint);
-    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for Dependabot cleanup.");
+    if (currentQuotaIsBlocked())
+      throw new HttpError(
+        429,
+        "GitHub API quota is too low for Dependabot cleanup.",
+      );
     const items = pickItems(json);
     if (!items.length) break;
     results.push(...items);
@@ -946,13 +1147,16 @@ async function githubRestAllWithinQuota(path, pickItems, perPage = 100, query = 
 async function mapLimit(items, limit, mapper) {
   const output = [];
   let index = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length || 1)) }, async () => {
-    while (index < items.length) {
-      const current = index;
-      index += 1;
-      output[current] = await mapper(items[current], current);
-    }
-  });
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(limit, items.length || 1)) },
+    async () => {
+      while (index < items.length) {
+        const current = index;
+        index += 1;
+        output[current] = await mapper(items[current], current);
+      }
+    },
+  );
   await Promise.all(workers);
   return output;
 }
@@ -986,7 +1190,12 @@ function parseJobs(value) {
 function parseDependabotQueueThreshold(value, fallback = 0) {
   if (value == null || value === "") return fallback;
   const threshold = Number(value);
-  if (!Number.isInteger(threshold) || threshold < 0 || threshold > DEPENDABOT_QUEUE_MAX_THRESHOLD) return fallback;
+  if (
+    !Number.isInteger(threshold) ||
+    threshold < 0 ||
+    threshold > DEPENDABOT_QUEUE_MAX_THRESHOLD
+  )
+    return fallback;
   return threshold;
 }
 
@@ -995,18 +1204,24 @@ function isDependabotLogin(value) {
 }
 
 function isDependabotWorkflowRun(run) {
-  return isDependabotLogin(run?.actor?.login || run?.actor) ||
-    isDependabotLogin(run?.triggering_actor?.login || run?.triggeringActor);
+  return (
+    isDependabotLogin(run?.actor?.login || run?.actor) ||
+    isDependabotLogin(run?.triggering_actor?.login || run?.triggeringActor)
+  );
 }
 
 function dependabotQueueDepth(runs) {
   return uniqueBy(
     (runs || []).filter((run) => run?.status === "queued"),
-    (run) => `${run.repo || ""}:${run.runId || run.id || run.url || JSON.stringify(run)}`
+    (run) =>
+      `${run.repo || ""}:${run.runId || run.id || run.url || JSON.stringify(run)}`,
   ).length;
 }
 
-function shouldCleanDependabotQueue(queueDepth, threshold = DEPENDABOT_QUEUE_THRESHOLD) {
+function shouldCleanDependabotQueue(
+  queueDepth,
+  threshold = DEPENDABOT_QUEUE_THRESHOLD,
+) {
   return threshold > 0 && queueDepth >= threshold;
 }
 
@@ -1016,19 +1231,36 @@ function shouldCleanDependabotQueue(queueDepth, threshold = DEPENDABOT_QUEUE_THR
 // Failing CI forever. When cleanup is opted in, hand them to the dashboard
 // pre-dismissed: they leave the actionable list and the tile counts but stay
 // reachable behind the dismissed bar's "Show" toggle.
-function markAutoDismissedDependabotRuns(runs, { enabled = DEPENDABOT_QUEUE_THRESHOLD > 0 } = {}) {
+function markAutoDismissedDependabotRuns(
+  runs,
+  { enabled = DEPENDABOT_QUEUE_THRESHOLD > 0 } = {},
+) {
   if (!enabled || !Array.isArray(runs)) return runs || [];
-  return runs.map((run) => (run?.dependabot
-    ? { ...run, autoDismissed: true, autoDismissReason: "Dependabot run — auto-dismissed by cleanup" }
-    : run));
+  return runs.map((run) =>
+    run?.dependabot
+      ? {
+          ...run,
+          autoDismissed: true,
+          autoDismissReason: "Dependabot run — auto-dismissed by cleanup",
+        }
+      : run,
+  );
 }
 
-const IGNORED_RUN_URLS = parseIgnoredRunUrls(process.env.IGNORED_RUN_URLS || "https://github.com/ryabinski-labs/echothread/actions/runs/31115181511");
+const IGNORED_RUN_URLS = parseIgnoredRunUrls(
+  process.env.IGNORED_RUN_URLS ||
+    "https://github.com/ryabinski-labs/echothread/actions/runs/31115181511",
+);
 
 function parseIgnoredRunUrls(value) {
-  if (value == null) return new Set(["https://github.com/ryabinski-labs/echothread/actions/runs/31115181511"]);
+  if (value == null)
+    return new Set([
+      "https://github.com/ryabinski-labs/echothread/actions/runs/31115181511",
+    ]);
   const raw = Array.isArray(value) ? value : String(value).split(",");
-  const set = new Set(["https://github.com/ryabinski-labs/echothread/actions/runs/31115181511"]);
+  const set = new Set([
+    "https://github.com/ryabinski-labs/echothread/actions/runs/31115181511",
+  ]);
   for (const item of raw) {
     const trimmed = String(item || "").trim();
     if (trimmed) set.add(trimmed);
@@ -1038,9 +1270,15 @@ function parseIgnoredRunUrls(value) {
 
 function markIgnoredRuns(runs) {
   if (!IGNORED_RUN_URLS.size || !Array.isArray(runs)) return runs || [];
-  return runs.map((run) => (run?.url && IGNORED_RUN_URLS.has(run.url)
-    ? { ...run, autoDismissed: true, autoDismissReason: "Stuck/outage run — auto-dismissed" }
-    : run));
+  return runs.map((run) =>
+    run?.url && IGNORED_RUN_URLS.has(run.url)
+      ? {
+          ...run,
+          autoDismissed: true,
+          autoDismissReason: "Stuck/outage run — auto-dismissed",
+        }
+      : run,
+  );
 }
 
 function parseOwners(value) {
@@ -1100,7 +1338,8 @@ function findSupersedingSuccessfulRun(completedRunsNewestFirst, failedRun) {
   const idx = completedRunsNewestFirst.indexOf(failedRun);
   if (idx <= 0) return null;
   for (let i = idx - 1; i >= 0; i--) {
-    if (runOutcome(completedRunsNewestFirst[i]) === "success") return completedRunsNewestFirst[i];
+    if (runOutcome(completedRunsNewestFirst[i]) === "success")
+      return completedRunsNewestFirst[i];
   }
   return null;
 }
@@ -1109,7 +1348,10 @@ function sameWorkflowRunLane(left, right) {
   if (!left || !right) return false;
   const leftWorkflow = left.path || left.name || "";
   const rightWorkflow = right.path || right.name || "";
-  return leftWorkflow === rightWorkflow && (left.head_branch || "") === (right.head_branch || "");
+  return (
+    leftWorkflow === rightWorkflow &&
+    (left.head_branch || "") === (right.head_branch || "")
+  );
 }
 
 // A failure is only worth surfacing if it is the latest completed run in its
@@ -1121,7 +1363,8 @@ function hasNewerCompletedRunInLane(completedRunsNewestFirst, failedRun) {
   const idx = completedRunsNewestFirst.indexOf(failedRun);
   if (idx <= 0) return false;
   for (let i = idx - 1; i >= 0; i--) {
-    if (sameWorkflowRunLane(completedRunsNewestFirst[i], failedRun)) return true;
+    if (sameWorkflowRunLane(completedRunsNewestFirst[i], failedRun))
+      return true;
   }
   return false;
 }
@@ -1131,9 +1374,11 @@ function selectFailedActionRuns(runs, { now = Date.now() } = {}) {
   const completedRuns = runs.filter((run) => run?.status === "completed");
   return completedRuns.filter((run) => {
     if (isCdWorkflowRun(run)) return false;
-    if (run.event === "pull_request" || run.event === "pull_request_target") return false;
+    if (run.event === "pull_request" || run.event === "pull_request_target")
+      return false;
     if (!FAILED_RUN_CONCLUSIONS.has(run.conclusion)) return false;
-    if (!isWithinFailedActionWindow(run.updated_at || run.created_at, now)) return false;
+    if (!isWithinFailedActionWindow(run.updated_at || run.created_at, now))
+      return false;
     return !hasNewerCompletedRunInLane(completedRuns, run);
   });
 }
@@ -1149,7 +1394,8 @@ function checkFinished(check) {
 }
 
 function checkFailed(check) {
-  const conclusion = check.__typename === "CheckRun" ? check.conclusion : check.state;
+  const conclusion =
+    check.__typename === "CheckRun" ? check.conclusion : check.state;
   return FAILED_CHECK_CONCLUSIONS.has(conclusion);
 }
 
@@ -1163,21 +1409,30 @@ function checkName(check) {
 }
 
 function failureLabel(value) {
-  return FAILURE_REASON_LABELS[value] || String(value || "failed").toLowerCase().replaceAll("_", " ");
+  return (
+    FAILURE_REASON_LABELS[value] ||
+    String(value || "failed")
+      .toLowerCase()
+      .replaceAll("_", " ")
+  );
 }
 
 function failedCheckLabel(check) {
-  const conclusion = check.__typename === "CheckRun" ? check.conclusion : check.state;
+  const conclusion =
+    check.__typename === "CheckRun" ? check.conclusion : check.state;
   return `${checkName(check)} ${failureLabel(conclusion)}`;
 }
 
 function failureReasonFromChecks(checks) {
-  const failedChecks = [...new Set(checks.filter(checkFailed).map(failedCheckLabel))];
+  const failedChecks = [
+    ...new Set(checks.filter(checkFailed).map(failedCheckLabel)),
+  ];
   if (!failedChecks.length) return { failedChecks, failureReason: "" };
-  const suffix = failedChecks.length > 3 ? `, +${failedChecks.length - 3} more` : "";
+  const suffix =
+    failedChecks.length > 3 ? `, +${failedChecks.length - 3} more` : "";
   return {
     failedChecks,
-    failureReason: `${failedChecks.slice(0, 3).join(", ")}${suffix}`
+    failureReason: `${failedChecks.slice(0, 3).join(", ")}${suffix}`,
   };
 }
 
@@ -1201,12 +1456,21 @@ async function fetchWorkflowRunSkipReason(repo, run) {
       `/repos/${repo}/actions/runs/${run.id}/jobs`,
       (json) => json?.jobs || [],
       100,
-      { filter: "latest" }
+      { filter: "latest" },
     );
     if (!jobs.length) return "";
-    const skippedJobs = [...new Set(jobs.filter((job) => String(job.conclusion || "").toLowerCase() === "skipped").map((job) => job.name || "unnamed job"))];
+    const skippedJobs = [
+      ...new Set(
+        jobs
+          .filter(
+            (job) => String(job.conclusion || "").toLowerCase() === "skipped",
+          )
+          .map((job) => job.name || "unnamed job"),
+      ),
+    ];
     if (!skippedJobs.length) return "";
-    const suffix = skippedJobs.length > 3 ? `, +${skippedJobs.length - 3} more` : "";
+    const suffix =
+      skippedJobs.length > 3 ? `, +${skippedJobs.length - 3} more` : "";
     return `Skipped jobs: ${skippedJobs.slice(0, 3).join(", ")}${suffix}`;
   } catch {
     return "";
@@ -1218,20 +1482,29 @@ function shortSha(value) {
 }
 
 function publicRouteFromFile(filename) {
-  const path = String(filename || "").replaceAll("\\", "/").replace(/^src\//, "");
+  const path = String(filename || "")
+    .replaceAll("\\", "/")
+    .replace(/^src\//, "");
   const appMatch = path.match(/^app\/(.+)\.(?:jsx?|tsx?|mdx)$/);
   if (appMatch && ["page", "layout"].includes(appMatch[1].split("/").at(-1))) {
     return routeFromSegments(appMatch[1].split("/").slice(0, -1));
   }
 
   const pagesMatch = path.match(/^pages\/(.+)\.(?:jsx?|tsx?|mdx)$/);
-  if (pagesMatch && !pagesMatch[1].startsWith("api/") && !pagesMatch[1].startsWith("_")) {
+  if (
+    pagesMatch &&
+    !pagesMatch[1].startsWith("api/") &&
+    !pagesMatch[1].startsWith("_")
+  ) {
     return routeFromSegments(pagesMatch[1].split("/"));
   }
 
   const publicMatch = path.match(/^public\/(.+)$/);
   if (publicMatch && !publicMatch[1].startsWith(".")) {
-    return `/${publicMatch[1].replace(/^index\.html$/, "")}`.replace(/\/$/, "/");
+    return `/${publicMatch[1].replace(/^index\.html$/, "")}`.replace(
+      /\/$/,
+      "/",
+    );
   }
 
   return "";
@@ -1239,8 +1512,16 @@ function publicRouteFromFile(filename) {
 
 function routeFromSegments(segments) {
   const visible = segments
-    .filter((segment) => segment && !segment.startsWith("(") && !segment.startsWith("@"))
-    .map((segment) => segment.replace(/^index$/, "").replace(/^\[\.\.\.(.+)\]$/, ":$1").replace(/^\[(.+)\]$/, ":$1"))
+    .filter(
+      (segment) =>
+        segment && !segment.startsWith("(") && !segment.startsWith("@"),
+    )
+    .map((segment) =>
+      segment
+        .replace(/^index$/, "")
+        .replace(/^\[\.\.\.(.+)\]$/, ":$1")
+        .replace(/^\[(.+)\]$/, ":$1"),
+    )
     .filter(Boolean);
   return `/${visible.join("/")}`.replace(/\/+/g, "/");
 }
@@ -1248,7 +1529,10 @@ function routeFromSegments(segments) {
 function joinUrl(base, route) {
   if (!base || !route) return "";
   try {
-    return new URL(route.replace(/^\//, ""), base.endsWith("/") ? base : `${base}/`).toString();
+    return new URL(
+      route.replace(/^\//, ""),
+      base.endsWith("/") ? base : `${base}/`,
+    ).toString();
   } catch {
     return "";
   }
@@ -1259,14 +1543,15 @@ function isBackendUrl(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
     const parts = host.split(".");
-    return parts.some((part) =>
-      part === "api" ||
-      part === "backend" ||
-      part === "srv" ||
-      part.startsWith("api-") ||
-      part.endsWith("-api") ||
-      part.startsWith("backend-") ||
-      part.endsWith("-backend")
+    return parts.some(
+      (part) =>
+        part === "api" ||
+        part === "backend" ||
+        part === "srv" ||
+        part.startsWith("api-") ||
+        part.endsWith("-api") ||
+        part.startsWith("backend-") ||
+        part.endsWith("-backend"),
     );
   } catch {
     return false;
@@ -1274,10 +1559,50 @@ function isBackendUrl(url) {
 }
 
 const PRODUCTION_TLDS = new Set([
-  "ai", "app", "au", "biz", "ca", "cc", "cloud", "co", "com", "de", "dev", "digital", "dk",
-  "email", "es", "fi", "finance", "fr", "in", "info", "io", "is", "it", "link", "live", "me",
-  "money", "net", "nl", "no", "org", "page", "se", "site", "software", "systems", "tech",
-  "today", "tools", "tv", "uk", "us", "world", "xyz"
+  "ai",
+  "app",
+  "au",
+  "biz",
+  "ca",
+  "cc",
+  "cloud",
+  "co",
+  "com",
+  "de",
+  "dev",
+  "digital",
+  "dk",
+  "email",
+  "es",
+  "fi",
+  "finance",
+  "fr",
+  "in",
+  "info",
+  "io",
+  "is",
+  "it",
+  "link",
+  "live",
+  "me",
+  "money",
+  "net",
+  "nl",
+  "no",
+  "org",
+  "page",
+  "se",
+  "site",
+  "software",
+  "systems",
+  "tech",
+  "today",
+  "tools",
+  "tv",
+  "uk",
+  "us",
+  "world",
+  "xyz",
 ]);
 
 function normalizeWebUrl(value) {
@@ -1285,7 +1610,9 @@ function normalizeWebUrl(value) {
   if (!trimmed) return "";
   try {
     const cleaned = trimmed.replace(/[),.;\]}]+$/, "");
-    const url = new URL(cleaned.startsWith("http") ? cleaned : `https://${cleaned}`);
+    const url = new URL(
+      cleaned.startsWith("http") ? cleaned : `https://${cleaned}`,
+    );
     if (!["http:", "https:"].includes(url.protocol)) return "";
     if (["localhost", "127.0.0.1", "0.0.0.0"].includes(url.hostname)) return "";
     return url.toString();
@@ -1302,16 +1629,48 @@ function likelyProductionUrl(value) {
     const tld = host.split(".").at(-1)?.toLowerCase() || "";
     if (!/^[a-z0-9.-]+$/i.test(host)) return "";
     if (!PRODUCTION_TLDS.has(tld)) return "";
-    if ([
-      "cjs", "css", "env", "example", "html", "js", "json", "jsx", "lock", "local", "map",
-      "md", "mjs", "php", "py", "rb", "sh", "sitemap", "test", "toml", "ts", "tsx", "txt", "xml", "yaml", "yml"
-    ].includes(tld)) return "";
+    if (
+      [
+        "cjs",
+        "css",
+        "env",
+        "example",
+        "html",
+        "js",
+        "json",
+        "jsx",
+        "lock",
+        "local",
+        "map",
+        "md",
+        "mjs",
+        "php",
+        "py",
+        "rb",
+        "sh",
+        "sitemap",
+        "test",
+        "toml",
+        "ts",
+        "tsx",
+        "txt",
+        "xml",
+        "yaml",
+        "yml",
+      ].includes(tld)
+    )
+      return "";
     if (host === "example.com" || host.endsWith(".example.com")) return "";
     if (host === "github.com" || host.endsWith(".github.com")) return "";
     if (host === "npmjs.com" || host.endsWith(".npmjs.com")) return "";
     if (host === "schema.org" || host.endsWith(".schema.org")) return "";
     if (host === "amazonaws.com" || host.endsWith(".amazonaws.com")) return "";
-    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "";
+    if (
+      host === "localhost" ||
+      host.endsWith(".localhost") ||
+      host.endsWith(".local")
+    )
+      return "";
     if (host.startsWith("docs.") || host.startsWith("www.docs.")) return "";
     return `${new URL(url).origin}/`;
   } catch {
@@ -1329,22 +1688,35 @@ function firstProductionUrl(values) {
 
 function extractProductionUrlsFromText(text) {
   const source = String(text || "");
-  const urls = [...source.matchAll(/https?:\/\/[^\s"'`<>)]+/gi)].map((match) => match[0]);
-  const envUrls = [...source.matchAll(/\b(?:SITE_URL|APP_URL|PUBLIC_URL|NEXT_PUBLIC_SITE_URL|VITE_SITE_URL)\s*[:=]\s*["']?([^"'\s,}]+)/gi)]
-    .map((match) => match[1]);
-  const urlHosts = new Set(urls.map((value) => {
-    try {
-      return new URL(value).hostname.toLowerCase();
-    } catch {
-      return "";
-    }
-  }).filter(Boolean));
-  const bareDomains = [...source.matchAll(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/[^\s"'`<>)]*)?/gi)]
+  const urls = [...source.matchAll(/https?:\/\/[^\s"'`<>)]+/gi)].map(
+    (match) => match[0],
+  );
+  const envUrls = [
+    ...source.matchAll(
+      /\b(?:SITE_URL|APP_URL|PUBLIC_URL|NEXT_PUBLIC_SITE_URL|VITE_SITE_URL)\s*[:=]\s*["']?([^"'\s,}]+)/gi,
+    ),
+  ].map((match) => match[1]);
+  const urlHosts = new Set(
+    urls
+      .map((value) => {
+        try {
+          return new URL(value).hostname.toLowerCase();
+        } catch {
+          return "";
+        }
+      })
+      .filter(Boolean),
+  );
+  const bareDomains = [
+    ...source.matchAll(/\b((?:[a-z0-9-]+\.)+[a-z]{2,})(?:\/[^\s"'`<>)]*)?/gi),
+  ]
     .map((match) => match[0])
     .filter((value) => !value.includes("@"))
     .filter((value) => {
       try {
-        return !urlHosts.has(new URL(`https://${value}`).hostname.toLowerCase());
+        return !urlHosts.has(
+          new URL(`https://${value}`).hostname.toLowerCase(),
+        );
       } catch {
         return true;
       }
@@ -1364,7 +1736,7 @@ function hostLooksDeployable(host) {
     ".onrender.com",
     ".fly.dev",
     ".herokuapp.com",
-    ".azurewebsites.net"
+    ".azurewebsites.net",
   ].some((suffix) => host.endsWith(suffix));
 }
 
@@ -1379,51 +1751,97 @@ function productionUrlScore(url, sourcePath, repo) {
   }
   const host = parsed.hostname.toLowerCase();
   const source = String(sourcePath || "").toLowerCase();
-  const repoName = repo.split("/").at(-1)?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
+  const repoName =
+    repo
+      .split("/")
+      .at(-1)
+      ?.toLowerCase()
+      .replace(/[^a-z0-9]/g, "") || "";
   const isProviderHost = hostLooksDeployable(host);
   let score = 1;
   if (parsed.protocol === "https:") score += 1;
   if (isProviderHost) score += 2;
   if (!isProviderHost) score += 7;
   if (repoName && host.replace(/[^a-z0-9]/g, "").includes(repoName)) score += 4;
-  if (/(prod|production|domain|site|url|deploy|cloudfront|amplify|vercel|netlify)/.test(normalized.toLowerCase())) score += 3;
-  if (/(readme|deploy|prod|production|infra|cdk|stack|cloudfront|route53|domain|config|env|serverless|terraform|sst)/.test(source)) score += 2;
+  if (
+    /(prod|production|domain|site|url|deploy|cloudfront|amplify|vercel|netlify)/.test(
+      normalized.toLowerCase(),
+    )
+  )
+    score += 3;
+  if (
+    /(readme|deploy|prod|production|infra|cdk|stack|cloudfront|route53|domain|config|env|serverless|terraform|sst)/.test(
+      source,
+    )
+  )
+    score += 2;
   if (/cloudfront\.net$/.test(host)) score -= 3;
   if (/(test|spec|mock|fixture|example|sample)/.test(source)) score -= 3;
-  if (/(amazonaws\.com\/documentation|docs\.aws\.amazon\.com|developer\.mozilla\.org|vitejs\.dev|nextjs\.org|react\.dev)/.test(host)) score = 0;
+  if (
+    /(amazonaws\.com\/documentation|docs\.aws\.amazon\.com|developer\.mozilla\.org|vitejs\.dev|nextjs\.org|react\.dev)/.test(
+      host,
+    )
+  )
+    score = 0;
   return Math.max(0, score);
 }
 
 function bestProductionUrlCandidate(candidates, repo) {
-  return candidates
-    .map((candidate) => ({
-      ...candidate,
-      url: likelyProductionUrl(candidate.url),
-      score: productionUrlScore(candidate.url, candidate.source, repo)
-    }))
-    .filter((candidate) => candidate.url && candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.source.localeCompare(b.source))[0] || null;
+  return (
+    candidates
+      .map((candidate) => ({
+        ...candidate,
+        url: likelyProductionUrl(candidate.url),
+        score: productionUrlScore(candidate.url, candidate.source, repo),
+      }))
+      .filter((candidate) => candidate.url && candidate.score > 0)
+      .sort(
+        (a, b) => b.score - a.score || a.source.localeCompare(b.source),
+      )[0] || null
+  );
 }
 
 function changeCue(filename, status = "") {
   const path = String(filename || "").toLowerCase();
-  const action = status === "removed" ? "was removed" : status === "added" ? "was added" : "changed";
-  if (/\.(css|scss|sass|less)$/.test(path)) return `Visual styling ${action}; check spacing, colors, responsive layout, and hover/focus states.`;
-  if (/(^|\/)(page|layout)\.(jsx?|tsx?|mdx)$/.test(path) || /(^|\/)pages\/.+\.(jsx?|tsx?|mdx)$/.test(path)) {
+  const action =
+    status === "removed"
+      ? "was removed"
+      : status === "added"
+        ? "was added"
+        : "changed";
+  if (/\.(css|scss|sass|less)$/.test(path))
+    return `Visual styling ${action}; check spacing, colors, responsive layout, and hover/focus states.`;
+  if (
+    /(^|\/)(page|layout)\.(jsx?|tsx?|mdx)$/.test(path) ||
+    /(^|\/)pages\/.+\.(jsx?|tsx?|mdx)$/.test(path)
+  ) {
     return `The rendered page ${action}; check copy, layout, primary actions, and empty/error states.`;
   }
-  if (/\/components?\//.test(path) || /\.(jsx?|tsx?)$/.test(path)) return `Shared UI or client behavior ${action}; check screens that use this component.`;
-  if (/\.(md|mdx)$/.test(path)) return `Content ${action}; check headings, links, and any rendered documentation page.`;
-  if (/(^|\/)(api|server|route)\b/.test(path)) return `Backend or route behavior ${action}; check the user flow that depends on this endpoint.`;
-  if (/(^|\/)(package-lock\.json|package\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(path)) return `Dependencies ${action}; check build output and dependency-sensitive screens.`;
-  if (/(^|\/)\.github\/workflows\//.test(path)) return `Automation ${action}; check that deployment and release steps still run as expected.`;
+  if (/\/components?\//.test(path) || /\.(jsx?|tsx?)$/.test(path))
+    return `Shared UI or client behavior ${action}; check screens that use this component.`;
+  if (/\.(md|mdx)$/.test(path))
+    return `Content ${action}; check headings, links, and any rendered documentation page.`;
+  if (/(^|\/)(api|server|route)\b/.test(path))
+    return `Backend or route behavior ${action}; check the user flow that depends on this endpoint.`;
+  if (
+    /(^|\/)(package-lock\.json|package\.json|pnpm-lock\.yaml|yarn\.lock)$/.test(
+      path,
+    )
+  )
+    return `Dependencies ${action}; check build output and dependency-sensitive screens.`;
+  if (/(^|\/)\.github\/workflows\//.test(path))
+    return `Automation ${action}; check that deployment and release steps still run as expected.`;
   return `File ${action}; check the nearby feature or content that depends on it.`;
 }
 
 function changeLabel(filename) {
   const route = publicRouteFromFile(filename);
   if (route) return route;
-  return String(filename || "Changed file").split("/").at(-1) || "Changed file";
+  return (
+    String(filename || "Changed file")
+      .split("/")
+      .at(-1) || "Changed file"
+  );
 }
 
 function buildChangedPages(files, deployTarget = {}) {
@@ -1441,7 +1859,7 @@ function buildChangedPages(files, deployTarget = {}) {
         sourcePath,
         sourceUrl: file.blob_url || "",
         environment: deployTarget.environment || "",
-        lookFor: `${changeCue(sourcePath, file.status)}${route.includes(":") ? " Replace the route parameter with a real production item before checking." : ""}`
+        lookFor: `${changeCue(sourcePath, file.status)}${route.includes(":") ? " Replace the route parameter with a real production item before checking." : ""}`,
       };
     })
     .filter(Boolean);
@@ -1450,22 +1868,37 @@ function buildChangedPages(files, deployTarget = {}) {
 const ROUTE_HINTS = [
   { pattern: /dashboard|overview|home/i, routes: ["/dashboard"] },
   { pattern: /signup|sign-up|register|registration/i, routes: ["/signup"] },
-  { pattern: /login|log-in|signin|sign-in|magic[-_\s]?link|auth/i, routes: ["/login"] },
+  {
+    pattern: /login|log-in|signin|sign-in|magic[-_\s]?link|auth/i,
+    routes: ["/login"],
+  },
   { pattern: /invite|invitation/i, routes: ["/invitations", "/invite"] },
   { pattern: /assessment|audit|questionnaire/i, routes: ["/assessment"] },
-  { pattern: /security|password|jwt|session/i, routes: ["/settings/security", "/login"] },
+  {
+    pattern: /security|password|jwt|session/i,
+    routes: ["/settings/security", "/login"],
+  },
   { pattern: /transaction|transactions/i, routes: ["/transactions"] },
-  { pattern: /plaid|depository|deposit|account|accounts/i, routes: ["/accounts"] },
-  { pattern: /billing|subscription|plan|pricing/i, routes: ["/billing", "/settings/billing"] },
-  { pattern: /profile|user|member/i, routes: ["/profile", "/settings/profile"] },
+  {
+    pattern: /plaid|depository|deposit|account|accounts/i,
+    routes: ["/accounts"],
+  },
+  {
+    pattern: /billing|subscription|plan|pricing/i,
+    routes: ["/billing", "/settings/billing"],
+  },
+  {
+    pattern: /profile|user|member/i,
+    routes: ["/profile", "/settings/profile"],
+  },
   { pattern: /settings|preferences/i, routes: ["/settings"] },
-  { pattern: /admin/i, routes: ["/admin"] }
+  { pattern: /admin/i, routes: ["/admin"] },
 ];
 
 function inferredRoutesFromChange(title = "", files = []) {
   const source = [
     title,
-    ...files.map((file) => file.filename || file.path || "")
+    ...files.map((file) => file.filename || file.path || ""),
   ].join(" ");
   const routes = [];
   for (const hint of ROUTE_HINTS) {
@@ -1484,14 +1917,16 @@ function buildInferredProductionPages(title, files, deployTarget = {}) {
     sourcePath: "inferred from PR title/files",
     sourceUrl: "",
     environment: deployTarget.environment || "production",
-    lookFor: "Inferred production page; verify the affected behavior visually."
+    lookFor: "Inferred production page; verify the affected behavior visually.",
   }));
 }
 
 function buildMergedPullRequestSummary(pr, files = [], deployTarget = {}) {
   const visibleFiles = files.slice(0, MERGED_PR_FILE_LINK_LIMIT);
   const changedPages = buildChangedPages(files, deployTarget);
-  const inferredPages = changedPages.length ? [] : buildInferredProductionPages(pr.title, files, deployTarget);
+  const inferredPages = changedPages.length
+    ? []
+    : buildInferredProductionPages(pr.title, files, deployTarget);
   const filesChanged = files.length || Number(pr.changed_files || 0);
   const productionUrl = deployTarget.url || "";
   return {
@@ -1512,19 +1947,29 @@ function buildMergedPullRequestSummary(pr, files = [], deployTarget = {}) {
       additions: Number(file.additions || 0),
       deletions: Number(file.deletions || 0),
       url: file.blob_url || "",
-      lookFor: changeCue(file.filename, file.status)
+      lookFor: changeCue(file.filename, file.status),
     })),
     hiddenFileCount: Math.max(0, filesChanged - visibleFiles.length),
     lookFor: changedPages.length
-      ? `Open ${changedPages.map((page) => page.label).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior described by this PR.`
+      ? `Open ${changedPages
+          .map((page) => page.label)
+          .slice(0, 3)
+          .join(
+            ", ",
+          )}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior described by this PR.`
       : files.length
-      ? `Open the PR files and verify the changed feature areas, especially ${visibleFiles.map((file) => file.filename).slice(0, 3).join(", ")}.`
-      : "Open the PR and Files tab to verify what changed."
+        ? `Open the PR files and verify the changed feature areas, especially ${visibleFiles
+            .map((file) => file.filename)
+            .slice(0, 3)
+            .join(", ")}.`
+        : "Open the PR and Files tab to verify what changed.",
   };
 }
 
 function summarizeMergedPullRequests(pullRequests = [], deployTarget = {}) {
-  return pullRequests.map((item) => buildMergedPullRequestSummary(item.pr, item.files, deployTarget));
+  return pullRequests.map((item) =>
+    buildMergedPullRequestSummary(item.pr, item.files, deployTarget),
+  );
 }
 
 function commitChangedPages(commit, deployTarget = {}) {
@@ -1535,7 +1980,9 @@ function buildCommitSummary(commit, deployTarget = {}) {
   const files = Array.isArray(commit.files) ? commit.files : [];
   const message = commit.commit?.message || "";
   const changedPages = commitChangedPages({ files }, deployTarget);
-  const inferredPages = changedPages.length ? [] : buildInferredProductionPages(message, files, deployTarget);
+  const inferredPages = changedPages.length
+    ? []
+    : buildInferredProductionPages(message, files, deployTarget);
   const visibleFiles = files.slice(0, MERGED_PR_FILE_LINK_LIMIT);
   const productionUrl = deployTarget.url || "";
   return {
@@ -1543,7 +1990,8 @@ function buildCommitSummary(commit, deployTarget = {}) {
     shortSha: shortSha(commit.sha),
     message: message.split("\n").find(Boolean) || "Commit",
     author: commit.commit?.author?.name || commit.author?.login || "unknown",
-    committedAt: commit.commit?.author?.date || commit.commit?.committer?.date || "",
+    committedAt:
+      commit.commit?.author?.date || commit.commit?.committer?.date || "",
     url: commit.html_url || "",
     productionUrl,
     productionEnvironment: deployTarget.environment || "",
@@ -1556,14 +2004,22 @@ function buildCommitSummary(commit, deployTarget = {}) {
       additions: Number(file.additions || 0),
       deletions: Number(file.deletions || 0),
       url: file.blob_url || "",
-      lookFor: changeCue(file.filename, file.status)
+      lookFor: changeCue(file.filename, file.status),
     })),
     hiddenFileCount: Math.max(0, files.length - visibleFiles.length),
     lookFor: changedPages.length
-      ? `Open ${changedPages.map((page) => page.label).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior changed by this commit.`
+      ? `Open ${changedPages
+          .map((page) => page.label)
+          .slice(0, 3)
+          .join(
+            ", ",
+          )}${changedPages.length > 3 ? ", and related pages" : ""}; verify the behavior changed by this commit.`
       : files.length
-      ? `Open the commit files and verify the changed areas, especially ${visibleFiles.map((file) => file.filename).slice(0, 3).join(", ")}.`
-      : "Open the commit to inspect the shipped change."
+        ? `Open the commit files and verify the changed areas, especially ${visibleFiles
+            .map((file) => file.filename)
+            .slice(0, 3)
+            .join(", ")}.`
+        : "Open the commit to inspect the shipped change.",
   };
 }
 
@@ -1574,34 +2030,63 @@ function buildReviewLinks(repo, branch = "") {
     mergedPullRequestsUrl: `https://github.com/${repo}/pulls?q=${encodedQuery}`,
     commitsUrl: `https://github.com/${repo}/commits${branchPath}`,
     compareHelpUrl: `https://github.com/${repo}/compare`,
-    repoUrl: `https://github.com/${repo}`
+    repoUrl: `https://github.com/${repo}`,
   };
 }
 
-function buildChangeSummary(repo, run, changeSet, deployTarget = {}, options = {}) {
+function buildChangeSummary(
+  repo,
+  run,
+  changeSet,
+  deployTarget = {},
+  options = {},
+) {
   const sha = run?.head_sha || changeSet?.sha || run?.head_commit?.id || "";
   const files = Array.isArray(changeSet?.files) ? changeSet.files : [];
-  const additions = changeSet?.stats?.additions ?? files.reduce((total, file) => total + Number(file.additions || 0), 0);
-  const deletions = changeSet?.stats?.deletions ?? files.reduce((total, file) => total + Number(file.deletions || 0), 0);
-  const commitCount = Number(changeSet?.total_commits || changeSet?.commits?.length || (changeSet?.sha ? 1 : 0));
+  const additions =
+    changeSet?.stats?.additions ??
+    files.reduce((total, file) => total + Number(file.additions || 0), 0);
+  const deletions =
+    changeSet?.stats?.deletions ??
+    files.reduce((total, file) => total + Number(file.deletions || 0), 0);
+  const commitCount = Number(
+    changeSet?.total_commits ||
+      changeSet?.commits?.length ||
+      (changeSet?.sha ? 1 : 0),
+  );
   const changedFiles = files.map((file) => ({
     path: file.filename || "",
     status: file.status || "",
     additions: Number(file.additions || 0),
     deletions: Number(file.deletions || 0),
     changes: Number(file.changes || 0),
-    url: file.blob_url || ""
+    url: file.blob_url || "",
   }));
   const changedPages = buildChangedPages(files, deployTarget);
   const visibleFiles = changedFiles.slice(0, CHANGE_FILE_LINK_LIMIT);
-  const hiddenFileCount = Math.max(0, changedFiles.length - visibleFiles.length);
-  const latestCommit = Array.isArray(changeSet?.commits) ? changeSet.commits.at(-1) : null;
-  const message = latestCommit?.commit?.message || changeSet?.commit?.message || run?.head_commit?.message || run?.display_title || "";
-  const firstLine = message.split("\n").find(Boolean) || run?.display_title || "No commit message available";
-  const source = options.source || (changeSet?.total_commits != null ? "compare" : "commit");
-  const sourceLabel = source === "compare"
-    ? `${shortSha(options.baseSha)}...${shortSha(sha)}`
-    : shortSha(sha);
+  const hiddenFileCount = Math.max(
+    0,
+    changedFiles.length - visibleFiles.length,
+  );
+  const latestCommit = Array.isArray(changeSet?.commits)
+    ? changeSet.commits.at(-1)
+    : null;
+  const message =
+    latestCommit?.commit?.message ||
+    changeSet?.commit?.message ||
+    run?.head_commit?.message ||
+    run?.display_title ||
+    "";
+  const firstLine =
+    message.split("\n").find(Boolean) ||
+    run?.display_title ||
+    "No commit message available";
+  const source =
+    options.source || (changeSet?.total_commits != null ? "compare" : "commit");
+  const sourceLabel =
+    source === "compare"
+      ? `${shortSha(options.baseSha)}...${shortSha(sha)}`
+      : shortSha(sha);
 
   return {
     sha,
@@ -1612,7 +2097,11 @@ function buildChangeSummary(repo, run, changeSet, deployTarget = {}, options = {
     commitCount,
     commitUrl: changeSet?.html_url || "",
     message: firstLine,
-    author: latestCommit?.commit?.author?.name || changeSet?.commit?.author?.name || run?.head_commit?.author?.name || "",
+    author:
+      latestCommit?.commit?.author?.name ||
+      changeSet?.commit?.author?.name ||
+      run?.head_commit?.author?.name ||
+      "",
     filesChanged: changedFiles.length,
     additions: Number(additions || 0),
     deletions: Number(deletions || 0),
@@ -1622,39 +2111,73 @@ function buildChangeSummary(repo, run, changeSet, deployTarget = {}, options = {
     changedFiles: visibleFiles.map((file) => ({
       ...file,
       label: changeLabel(file.path),
-      lookFor: changeCue(file.path, file.status)
+      lookFor: changeCue(file.path, file.status),
     })),
     hiddenFileCount,
-    mergedPullRequests: summarizeMergedPullRequests(options.mergedPullRequests, deployTarget),
-    recentCommits: (options.recentCommits || []).map((commit) => buildCommitSummary(commit, deployTarget)),
+    mergedPullRequests: summarizeMergedPullRequests(
+      options.mergedPullRequests,
+      deployTarget,
+    ),
+    recentCommits: (options.recentCommits || []).map((commit) =>
+      buildCommitSummary(commit, deployTarget),
+    ),
     reviewLinks: buildReviewLinks(repo, run?.head_branch || ""),
     lookFor: changedPages.length
-      ? `Open the changed page links and verify the rendered routes affected by ${changedPages.map((page) => page.sourcePath).slice(0, 3).join(", ")}${changedPages.length > 3 ? ", and related files" : ""}${source === "compare" ? " since the previous completed CD run" : ""}.`
+      ? `Open the changed page links and verify the rendered routes affected by ${changedPages
+          .map((page) => page.sourcePath)
+          .slice(0, 3)
+          .join(
+            ", ",
+          )}${changedPages.length > 3 ? ", and related files" : ""}${source === "compare" ? " since the previous completed CD run" : ""}.`
       : options.mergedPullRequests?.length
-      ? `No deployment diff was available for this run. Use the recent merged PR summary below to inspect the latest shipped work.`
-      : options.recentCommits?.length
-      ? `No deployment diff or merged PR metadata was available. Use the recent commit summary below to inspect the latest shipped work.`
-      : `GitHub did not return deployment diff, merged PR, or commit metadata for this run. Use the manual review links below to inspect merged PRs, commit history, or compare changes in GitHub.`
+        ? `No deployment diff was available for this run. Use the recent merged PR summary below to inspect the latest shipped work.`
+        : options.recentCommits?.length
+          ? `No deployment diff or merged PR metadata was available. Use the recent commit summary below to inspect the latest shipped work.`
+          : `GitHub did not return deployment diff, merged PR, or commit metadata for this run. Use the manual review links below to inspect merged PRs, commit history, or compare changes in GitHub.`,
   };
 }
 
-async function fetchWorkflowRunChangeSummary(repo, run, deployTarget, previousRun = null, mergedPullRequests = [], recentCommits = []) {
+async function fetchWorkflowRunChangeSummary(
+  repo,
+  run,
+  deployTarget,
+  previousRun = null,
+  mergedPullRequests = [],
+  recentCommits = [],
+) {
   const sha = run?.head_sha || run?.head_commit?.id;
-  if (!sha) return buildChangeSummary(repo, run, null, deployTarget, { mergedPullRequests, recentCommits });
+  if (!sha)
+    return buildChangeSummary(repo, run, null, deployTarget, {
+      mergedPullRequests,
+      recentCommits,
+    });
   const baseSha = previousRun?.head_sha || previousRun?.head_commit?.id || "";
   if (baseSha && baseSha !== sha) {
     try {
-      const compare = await githubRequest(`/repos/${repo}/compare/${baseSha}...${sha}`);
-      return buildChangeSummary(repo, run, compare, deployTarget, { source: "compare", baseSha, mergedPullRequests, recentCommits });
+      const compare = await githubRequest(
+        `/repos/${repo}/compare/${baseSha}...${sha}`,
+      );
+      return buildChangeSummary(repo, run, compare, deployTarget, {
+        source: "compare",
+        baseSha,
+        mergedPullRequests,
+        recentCommits,
+      });
     } catch {
       // Fall back to the head commit below.
     }
   }
   try {
     const commit = await githubRequest(`/repos/${repo}/commits/${sha}`);
-    return buildChangeSummary(repo, run, commit, deployTarget, { mergedPullRequests, recentCommits });
+    return buildChangeSummary(repo, run, commit, deployTarget, {
+      mergedPullRequests,
+      recentCommits,
+    });
   } catch {
-    return buildChangeSummary(repo, run, null, deployTarget, { mergedPullRequests, recentCommits });
+    return buildChangeSummary(repo, run, null, deployTarget, {
+      mergedPullRequests,
+      recentCommits,
+    });
   }
 }
 
@@ -1670,11 +2193,18 @@ async function fetchWorkflowRunFailureReason(repo, run) {
       `/repos/${repo}/actions/runs/${run.id}/jobs`,
       (json) => json?.jobs || [],
       100,
-      { filter: "latest" }
+      { filter: "latest" },
     );
-    const failedJobs = [...new Set(jobs.filter((job) => FAILED_JOB_CONCLUSIONS.has(job.conclusion)).map(failedJobLabel))];
+    const failedJobs = [
+      ...new Set(
+        jobs
+          .filter((job) => FAILED_JOB_CONCLUSIONS.has(job.conclusion))
+          .map(failedJobLabel),
+      ),
+    ];
     if (!failedJobs.length) return fallback;
-    const suffix = failedJobs.length > 3 ? `, +${failedJobs.length - 3} more` : "";
+    const suffix =
+      failedJobs.length > 3 ? `, +${failedJobs.length - 3} more` : "";
     return `${failedJobs.slice(0, 3).join(", ")}${suffix}`;
   } catch {
     return fallback;
@@ -1691,7 +2221,10 @@ function runningCheckLabel(check) {
 }
 
 function classifyPullRequest(pr) {
-  const checks = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes?.filter(Boolean) || [];
+  const checks =
+    pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes?.filter(
+      Boolean,
+    ) || [];
   const mergeable = pr.mergeable || "UNKNOWN";
   const hasConflict = mergeable === "CONFLICTING";
   const base = {
@@ -1710,7 +2243,7 @@ function classifyPullRequest(pr) {
     headSha: pr.headRefOid || "",
     baseRefName: pr.baseRefName || "",
     headRefName: pr.headRefName || "",
-    headRepo: pr.headRepository?.nameWithOwner || ""
+    headRepo: pr.headRepository?.nameWithOwner || "",
   };
   if (!checks.length) {
     return { ...base, state: "pass", checkCount: 0, runningChecks: [] };
@@ -1723,14 +2256,18 @@ function classifyPullRequest(pr) {
       checkCount: checks.length,
       runningChecks: [],
       failedChecks: failure.failedChecks,
-      failureReason: failure.failureReason
+      failureReason: failure.failureReason,
     };
   }
   return {
     ...base,
     state: "running",
     checkCount: checks.length,
-    runningChecks: [...new Set(checks.filter((check) => !checkFinished(check)).map(runningCheckLabel))]
+    runningChecks: [
+      ...new Set(
+        checks.filter((check) => !checkFinished(check)).map(runningCheckLabel),
+      ),
+    ],
   };
 }
 
@@ -1738,7 +2275,11 @@ async function fetchPrQuery(queryText, { ownerHint } = {}) {
   const pullRequests = [];
   let endCursor = null;
   for (let page = 0; page < 50; page += 1) {
-    const json = await githubGraphql(PR_SEARCH_GRAPHQL, { q: queryText, endCursor }, { ownerHint });
+    const json = await githubGraphql(
+      PR_SEARCH_GRAPHQL,
+      { q: queryText, endCursor },
+      { ownerHint },
+    );
     const search = json?.data?.search;
     if (!search) break;
     pullRequests.push(
@@ -1746,7 +2287,7 @@ async function fetchPrQuery(queryText, { ownerHint } = {}) {
         .filter((node) => node?.__typename === "PullRequest")
         .map(classifyPullRequest)
         .filter((pr) => !pr.isArchived)
-        .filter(Boolean)
+        .filter(Boolean),
     );
     if (!search.pageInfo?.hasNextPage) break;
     endCursor = search.pageInfo.endCursor;
@@ -1756,7 +2297,11 @@ async function fetchPrQuery(queryText, { ownerHint } = {}) {
 
 async function fetchPullRequestByNumber(repo, number) {
   const { owner, name } = parseRepo(repo);
-  const json = await githubGraphql(PR_BY_NUMBER_GRAPHQL, { owner, name, number }, { ownerHint: owner });
+  const json = await githubGraphql(
+    PR_BY_NUMBER_GRAPHQL,
+    { owner, name, number },
+    { ownerHint: owner },
+  );
   const pr = json?.data?.repository?.pullRequest;
   if (!pr) {
     throw new HttpError(404, `Pull request ${repo}#${number} was not found.`);
@@ -1769,7 +2314,9 @@ async function getAccount() {
     const installations = await discoverInstallations();
     const first = installations.values().next().value;
     if (!first) {
-      throw new Error("GitHub App has no installations. Install the app on at least one account.");
+      throw new Error(
+        "GitHub App has no installations. Install the app on at least one account.",
+      );
     }
     return first.accountLogin;
   }
@@ -1778,20 +2325,30 @@ async function getAccount() {
 }
 
 async function allOwners(me) {
-  return cachedGithubValue(`owners:${me}`, OWNER_REPOS_CACHE_TTL_MS, async () => {
-    if (APP_AUTH_ENABLED) {
-      const installations = await discoverInstallations();
-      return Array.from(installations.values()).map((inst) => inst.accountLogin);
-    }
-    const orgs = await githubRestAll("/user/orgs", (json) => (Array.isArray(json) ? json : []));
-    return [me, ...orgs.map((org) => org.login).filter(Boolean)];
-  });
+  return cachedGithubValue(
+    `owners:${me}`,
+    OWNER_REPOS_CACHE_TTL_MS,
+    async () => {
+      if (APP_AUTH_ENABLED) {
+        const installations = await discoverInstallations();
+        return Array.from(installations.values()).map(
+          (inst) => inst.accountLogin,
+        );
+      }
+      const orgs = await githubRestAll("/user/orgs", (json) =>
+        Array.isArray(json) ? json : [],
+      );
+      return [me, ...orgs.map((org) => org.login).filter(Boolean)];
+    },
+  );
 }
 
 async function selectedOwners(me, ownerFilter) {
   const all = await allOwners(me);
   if (!ownerFilter || !ownerFilter.length) return all;
-  const wanted = new Set(ownerFilter.map((value) => String(value).toLowerCase()));
+  const wanted = new Set(
+    ownerFilter.map((value) => String(value).toLowerCase()),
+  );
   return all.filter((owner) => wanted.has(owner.toLowerCase()));
 }
 
@@ -1818,41 +2375,73 @@ async function fetchPullRequests({ mode, me, jobs, owners: ownerFilter }) {
   // even if the repo owner is not in the App's installation set).
   if (ownerFilter && ownerFilter.length) {
     const allowed = new Set(owners.map((owner) => owner.toLowerCase()));
-    return merged.filter((pr) => allowed.has(String(pr.repo || "").split("/")[0].toLowerCase()));
+    return merged.filter((pr) =>
+      allowed.has(
+        String(pr.repo || "")
+          .split("/")[0]
+          .toLowerCase(),
+      ),
+    );
   }
   return merged;
 }
 
 async function fetchOwnerRepos(owner, me) {
-  return cachedGithubValue(`owner-repos:${owner}:${me}`, OWNER_REPOS_CACHE_TTL_MS, async () => {
-    if (APP_AUTH_ENABLED) {
-      const installations = await discoverInstallations();
-      const installation = installations.get(owner.toLowerCase());
-      if (!installation) return [];
-      const repos = await githubRestAll(
-        "/installation/repositories",
-        (json) => json?.repositories || [],
-        100,
-        {},
-        owner
+  return cachedGithubValue(
+    `owner-repos:${owner}:${me}`,
+    OWNER_REPOS_CACHE_TTL_MS,
+    async () => {
+      if (APP_AUTH_ENABLED) {
+        const installations = await discoverInstallations();
+        const installation = installations.get(owner.toLowerCase());
+        if (!installation) return [];
+        const repos = await githubRestAll(
+          "/installation/repositories",
+          (json) => json?.repositories || [],
+          100,
+          {},
+          owner,
+        );
+        return repos
+          .filter(
+            (repo) =>
+              !repo.archived &&
+              repo.owner?.login?.toLowerCase() === owner.toLowerCase(),
+          )
+          .map((repo) => repo.full_name);
+      }
+      if (owner === me) {
+        const repos = await githubRestAll(
+          "/user/repos",
+          (json) => (Array.isArray(json) ? json : []),
+          100,
+          {
+            affiliation: "owner",
+          },
+        );
+        return repos
+          .filter((repo) => !repo.archived && repo.owner?.login === me)
+          .map((repo) => repo.full_name);
+      }
+      const repos = await githubRestAll(`/orgs/${owner}/repos`, (json) =>
+        Array.isArray(json) ? json : [],
       );
       return repos
-        .filter((repo) => !repo.archived && repo.owner?.login?.toLowerCase() === owner.toLowerCase())
+        .filter((repo) => !repo.archived)
         .map((repo) => repo.full_name);
-    }
-    if (owner === me) {
-      const repos = await githubRestAll("/user/repos", (json) => (Array.isArray(json) ? json : []), 100, {
-        affiliation: "owner"
-      });
-      return repos.filter((repo) => !repo.archived && repo.owner?.login === me).map((repo) => repo.full_name);
-    }
-    const repos = await githubRestAll(`/orgs/${owner}/repos`, (json) => (Array.isArray(json) ? json : []));
-    return repos.filter((repo) => !repo.archived).map((repo) => repo.full_name);
-  });
+    },
+  );
 }
 
-async function listRepos({ mode, me, pullRequests, jobs, owners: ownerFilter }) {
-  if (mode === "mine") return [...new Set(pullRequests.map((pr) => pr.repo))].sort();
+async function listRepos({
+  mode,
+  me,
+  pullRequests,
+  jobs,
+  owners: ownerFilter,
+}) {
+  if (mode === "mine")
+    return [...new Set(pullRequests.map((pr) => pr.repo))].sort();
   if (mode === "owned") return fetchOwnerRepos(me, me);
   const owners = await selectedOwners(me, ownerFilter);
   const groups = await mapLimit(owners, jobs, async (owner) => {
@@ -1866,18 +2455,33 @@ async function listRepos({ mode, me, pullRequests, jobs, owners: ownerFilter }) 
 }
 
 function isCdWorkflow(workflow) {
-  return CD_WORKFLOW_PATTERN.test(workflow.name || "") || CD_WORKFLOW_PATTERN.test(workflow.path || "");
+  return (
+    CD_WORKFLOW_PATTERN.test(workflow.name || "") ||
+    CD_WORKFLOW_PATTERN.test(workflow.path || "")
+  );
 }
 
 function isCdWorkflowRun(run) {
-  return CD_WORKFLOW_PATTERN.test(run.name || "") || CD_WORKFLOW_PATTERN.test(run.path || "");
+  return (
+    CD_WORKFLOW_PATTERN.test(run.name || "") ||
+    CD_WORKFLOW_PATTERN.test(run.path || "")
+  );
 }
 
 async function fetchCdWorkflows(repo) {
-  return cachedGithubValue(`cd-workflows:${repo}`, CD_WORKFLOW_CACHE_TTL_MS, async () => {
-    const workflows = await githubRestAll(`/repos/${repo}/actions/workflows`, (json) => json?.workflows || []);
-    return workflows.filter((workflow) => workflow.state === "active" && isCdWorkflow(workflow));
-  });
+  return cachedGithubValue(
+    `cd-workflows:${repo}`,
+    CD_WORKFLOW_CACHE_TTL_MS,
+    async () => {
+      const workflows = await githubRestAll(
+        `/repos/${repo}/actions/workflows`,
+        (json) => json?.workflows || [],
+      );
+      return workflows.filter(
+        (workflow) => workflow.state === "active" && isCdWorkflow(workflow),
+      );
+    },
+  );
 }
 
 async function fetchWorkflowRuns(repo, workflowId, params) {
@@ -1890,68 +2494,91 @@ async function fetchWorkflowRuns(repo, workflowId, params) {
 }
 
 async function fetchRecentDeploymentTargets(repo) {
-  return cachedGithubValue(`deployment-targets:${repo}`, DEPLOYMENT_TARGET_CACHE_TTL_MS, async () => {
-    const targets = new Map();
-    let deployments = [];
-    try {
-      deployments = await githubRestAll(`/repos/${repo}/deployments`, (json) => (Array.isArray(json) ? json : []), 20);
-    } catch {
-      return targets;
-    }
-
-    for (const deployment of deployments.slice(0, 20)) {
-      if (!deployment.statuses_url || targets.has(deployment.ref)) continue;
+  return cachedGithubValue(
+    `deployment-targets:${repo}`,
+    DEPLOYMENT_TARGET_CACHE_TTL_MS,
+    async () => {
+      const targets = new Map();
+      let deployments = [];
       try {
-        const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
-        const latest = Array.isArray(statuses) ? statuses[0] : null;
-        const url = latest?.target_url || latest?.environment_url || "";
-        if (latest && SUCCESSFUL_DEPLOYMENT_STATES.has(latest.state) && url) {
-          targets.set(deployment.ref || "", {
-            url,
-            environment: deployment.environment || latest.environment || ""
-          });
-        }
+        deployments = await githubRestAll(
+          `/repos/${repo}/deployments`,
+          (json) => (Array.isArray(json) ? json : []),
+          20,
+        );
       } catch {
-        continue;
+        return targets;
       }
-    }
 
-    return targets;
-  });
+      for (const deployment of deployments.slice(0, 20)) {
+        if (!deployment.statuses_url || targets.has(deployment.ref)) continue;
+        try {
+          const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
+          const latest = Array.isArray(statuses) ? statuses[0] : null;
+          const url = latest?.target_url || latest?.environment_url || "";
+          if (latest && SUCCESSFUL_DEPLOYMENT_STATES.has(latest.state) && url) {
+            targets.set(deployment.ref || "", {
+              url,
+              environment: deployment.environment || latest.environment || "",
+            });
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      return targets;
+    },
+  );
 }
 
 async function fetchRepoProductionTarget(repo) {
-  return cachedGithubValue(`production-target:${repo}`, PRODUCTION_TARGET_CACHE_TTL_MS, async () => {
-    let metadata = null;
-    try {
-      metadata = await githubRequest(`/repos/${repo}`);
-      const homepage = likelyProductionUrl(metadata?.homepage);
-      if (homepage) {
-        return {
-          url: homepage,
-          environment: "production",
-          source: "repository homepage"
-        };
-      }
-    } catch {}
+  return cachedGithubValue(
+    `production-target:${repo}`,
+    PRODUCTION_TARGET_CACHE_TTL_MS,
+    async () => {
+      let metadata = null;
+      try {
+        metadata = await githubRequest(`/repos/${repo}`);
+        const homepage = likelyProductionUrl(metadata?.homepage);
+        if (homepage) {
+          return {
+            url: homepage,
+            environment: "production",
+            source: "repository homepage",
+          };
+        }
+      } catch {}
 
-    const defaultBranch = metadata?.default_branch || "";
-    const codeTarget = await fetchRepoProductionTargetFromCode(repo, defaultBranch);
-    if (codeTarget.url) return codeTarget;
-    const scanTarget = await fetchRepoProductionTargetFromTree(repo, defaultBranch);
-    if (scanTarget.url) return scanTarget;
-    return {};
-  });
+      const defaultBranch = metadata?.default_branch || "";
+      const codeTarget = await fetchRepoProductionTargetFromCode(
+        repo,
+        defaultBranch,
+      );
+      if (codeTarget.url) return codeTarget;
+      const scanTarget = await fetchRepoProductionTargetFromTree(
+        repo,
+        defaultBranch,
+      );
+      if (scanTarget.url) return scanTarget;
+      return {};
+    },
+  );
 }
 
 async function fetchRepoTextFile(repo, path, ref = "") {
   try {
-    const json = await githubRequest(`/repos/${repo}/contents/${encodeURIComponent(path).replaceAll("%2F", "/")}`, {
-      query: { ref }
-    });
+    const json = await githubRequest(
+      `/repos/${repo}/contents/${encodeURIComponent(path).replaceAll("%2F", "/")}`,
+      {
+        query: { ref },
+      },
+    );
     if (json?.type !== "file" || !json.content) return "";
     if (json.encoding === "base64") {
-      return Buffer.from(json.content.replace(/\s/g, ""), "base64").toString("utf8");
+      return Buffer.from(json.content.replace(/\s/g, ""), "base64").toString(
+        "utf8",
+      );
     }
     return String(json.content || "");
   } catch {
@@ -1968,7 +2595,7 @@ function productionUrlFromPackageJson(text) {
       pkg.config?.site,
       pkg.config?.url,
       pkg.site,
-      pkg.url
+      pkg.url,
     ]);
   } catch {
     return "";
@@ -1976,7 +2603,10 @@ function productionUrlFromPackageJson(text) {
 }
 
 function productionUrlFromCname(text) {
-  const line = String(text || "").split(/\r?\n/).map((item) => item.trim()).find(Boolean);
+  const line = String(text || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .find(Boolean);
   return line ? likelyProductionUrl(line) : "";
 }
 
@@ -1986,7 +2616,11 @@ function productionUrlFromCname(text) {
 function productionTargetFromCodeFiles(files = {}) {
   const packageUrl = productionUrlFromPackageJson(files["package.json"]);
   if (packageUrl) {
-    return { url: packageUrl, environment: "production", source: "package.json homepage" };
+    return {
+      url: packageUrl,
+      environment: "production",
+      source: "package.json homepage",
+    };
   }
 
   for (const cnamePath of ["public/CNAME", "CNAME"]) {
@@ -1997,8 +2631,11 @@ function productionTargetFromCodeFiles(files = {}) {
   }
 
   for (const path of PRODUCTION_TARGET_CODE_FILES) {
-    if (path === "package.json" || path === "public/CNAME" || path === "CNAME") continue;
-    const url = firstProductionUrl(extractProductionUrlsFromText(files[path] || ""));
+    if (path === "package.json" || path === "public/CNAME" || path === "CNAME")
+      continue;
+    const url = firstProductionUrl(
+      extractProductionUrlsFromText(files[path] || ""),
+    );
     if (url) {
       return { url, environment: "production", source: path };
     }
@@ -2008,10 +2645,13 @@ function productionTargetFromCodeFiles(files = {}) {
 }
 
 function buildProductionTargetCodeQuery() {
-  const params = PRODUCTION_TARGET_CODE_FILES.map((_, index) => `$e${index}: String!`).join(", ");
-  const fields = PRODUCTION_TARGET_CODE_FILES
-    .map((_, index) => `f${index}: object(expression: $e${index}) { ... on Blob { text } }`)
-    .join("\n      ");
+  const params = PRODUCTION_TARGET_CODE_FILES.map(
+    (_, index) => `$e${index}: String!`,
+  ).join(", ");
+  const fields = PRODUCTION_TARGET_CODE_FILES.map(
+    (_, index) =>
+      `f${index}: object(expression: $e${index}) { ... on Blob { text } }`,
+  ).join("\n      ");
   return `query ProductionTargetFiles($owner: String!, $name: String!, ${params}) {
     repository(owner: $owner, name: $name) {
       ${fields}
@@ -2037,7 +2677,11 @@ async function fetchRepoProductionTargetFromCode(repo, ref = "") {
     PRODUCTION_TARGET_CODE_FILES.forEach((path, index) => {
       variables[`e${index}`] = `${expressionRef}:${path}`;
     });
-    const json = await githubGraphql(buildProductionTargetCodeQuery(), variables, { ownerHint: owner });
+    const json = await githubGraphql(
+      buildProductionTargetCodeQuery(),
+      variables,
+      { ownerHint: owner },
+    );
     const repository = json?.data?.repository;
     if (repository) {
       const files = {};
@@ -2066,15 +2710,41 @@ async function fetchRepoProductionTargetFromCodeViaRest(repo, ref = "") {
 
 function isProductionTargetScanPath(path) {
   const normalized = String(path || "").toLowerCase();
-  if (!normalized || normalized.includes("node_modules/") || normalized.includes("dist/") || normalized.includes("build/")) return false;
-  if (normalized.includes(".git/") || normalized.includes("coverage/") || normalized.includes("__snapshots__/")) return false;
-  if (/(^|\/)(readme|deploy|deployment|production|prod|env|domain|domains|site|config|settings|constants|outputs|cloudfront|route53|serverless|sst|amplify|vercel|netlify|terraform|cdk|stack|stacks|infra|infrastructure)([-_.][^/]*)?\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(path)) {
+  if (
+    !normalized ||
+    normalized.includes("node_modules/") ||
+    normalized.includes("dist/") ||
+    normalized.includes("build/")
+  )
+    return false;
+  if (
+    normalized.includes(".git/") ||
+    normalized.includes("coverage/") ||
+    normalized.includes("__snapshots__/")
+  )
+    return false;
+  if (
+    /(^|\/)(readme|deploy|deployment|production|prod|env|domain|domains|site|config|settings|constants|outputs|cloudfront|route53|serverless|sst|amplify|vercel|netlify|terraform|cdk|stack|stacks|infra|infrastructure)([-_.][^/]*)?\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(
+      path,
+    )
+  ) {
     return true;
   }
-  if (/(^|\/)(package\.json|cname|\.env\.example|\.env\.production|\.env\.production\.example|vercel\.json|netlify\.toml|serverless\.ya?ml|sst\.config\.(js|ts)|amplify\.ya?ml)$/i.test(path)) {
+  if (
+    /(^|\/)(package\.json|cname|\.env\.example|\.env\.production|\.env\.production\.example|vercel\.json|netlify\.toml|serverless\.ya?ml|sst\.config\.(js|ts)|amplify\.ya?ml)$/i.test(
+      path,
+    )
+  ) {
     return true;
   }
-  if (/^(infra|infrastructure|cdk|stacks?|lib|config|deploy|deployment|scripts|\.github\/workflows)\//i.test(path) && /\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(path)) {
+  if (
+    /^(infra|infrastructure|cdk|stacks?|lib|config|deploy|deployment|scripts|\.github\/workflows)\//i.test(
+      path,
+    ) &&
+    /\.(md|txt|json|js|mjs|cjs|ts|tsx|yml|yaml|toml|tf|env|example)$/i.test(
+      path,
+    )
+  ) {
     return true;
   }
   return false;
@@ -2083,9 +2753,12 @@ function isProductionTargetScanPath(path) {
 async function fetchRepoTree(repo, ref = "") {
   const treeRef = ref || "HEAD";
   try {
-    const json = await githubRequest(`/repos/${repo}/git/trees/${encodeURIComponent(treeRef)}`, {
-      query: { recursive: "1" }
-    });
+    const json = await githubRequest(
+      `/repos/${repo}/git/trees/${encodeURIComponent(treeRef)}`,
+      {
+        query: { recursive: "1" },
+      },
+    );
     return Array.isArray(json?.tree) ? json.tree : [];
   } catch {
     return [];
@@ -2096,8 +2769,12 @@ async function fetchRepoProductionTargetFromTree(repo, ref = "") {
   const tree = await fetchRepoTree(repo, ref);
   const candidates = [];
   const files = tree
-    .filter((item) => item.type === "blob" && isProductionTargetScanPath(item.path))
-    .filter((item) => !item.size || item.size <= PRODUCTION_TARGET_MAX_FILE_BYTES)
+    .filter(
+      (item) => item.type === "blob" && isProductionTargetScanPath(item.path),
+    )
+    .filter(
+      (item) => !item.size || item.size <= PRODUCTION_TARGET_MAX_FILE_BYTES,
+    )
     .sort((a, b) => a.path.length - b.path.length)
     .slice(0, PRODUCTION_TARGET_SCAN_LIMIT);
 
@@ -2117,54 +2794,73 @@ async function fetchRepoProductionTargetFromTree(repo, ref = "") {
     ? {
         url: best.url,
         environment: "production",
-        source: best.source
+        source: best.source,
       }
     : {};
 }
 
 async function fetchPullRequestFiles(repo, number) {
-  return cachedGithubValue(`pr-files:${repo}:${number}`, MERGED_PR_CACHE_TTL_MS, async () => {
-    try {
-      const files = await githubRestPage(`/repos/${repo}/pulls/${number}/files`, 1, 100);
-      return Array.isArray(files) ? files : [];
-    } catch {
-      return [];
-    }
-  });
+  return cachedGithubValue(
+    `pr-files:${repo}:${number}`,
+    MERGED_PR_CACHE_TTL_MS,
+    async () => {
+      try {
+        const files = await githubRestPage(
+          `/repos/${repo}/pulls/${number}/files`,
+          1,
+          100,
+        );
+        return Array.isArray(files) ? files : [];
+      } catch {
+        return [];
+      }
+    },
+  );
 }
 
 async function fetchMergedPullRequestsFromList(repo) {
   const pulls = await githubRestPage(`/repos/${repo}/pulls`, 1, 100, {
     state: "closed",
     sort: "updated",
-    direction: "desc"
+    direction: "desc",
   });
   return (Array.isArray(pulls) ? pulls : [])
     .filter((pr) => pr.merged_at)
-    .sort((a, b) => String(b.merged_at || "").localeCompare(String(a.merged_at || "")))
+    .sort((a, b) =>
+      String(b.merged_at || "").localeCompare(String(a.merged_at || "")),
+    )
     .slice(0, MERGED_PR_SUMMARY_LIMIT);
 }
 
 async function fetchRecentMergedPullRequests(repo) {
-  return cachedGithubValue(`merged-prs:${repo}`, MERGED_PR_CACHE_TTL_MS, async () => {
-    try {
-      // List-only: the 100 most-recently-updated closed PRs reliably cover the
-      // "recent merged" window. We deliberately avoid the REST /search/issues
-      // fallback here — it draws on the scarce 30/min Search secondary limit and
-      // would pause the whole dashboard for marginal coverage of stale merges.
-      const merged = await fetchMergedPullRequestsFromList(repo);
-      return mapLimit(merged, 4, async (pr, index) => ({
-        pr,
-        files: index < MERGED_PR_FILE_DETAIL_FETCH_LIMIT ? await fetchPullRequestFiles(repo, pr.number) : []
-      }));
-    } catch {
-      return [];
-    }
-  });
+  return cachedGithubValue(
+    `merged-prs:${repo}`,
+    MERGED_PR_CACHE_TTL_MS,
+    async () => {
+      try {
+        // List-only: the 100 most-recently-updated closed PRs reliably cover the
+        // "recent merged" window. We deliberately avoid the REST /search/issues
+        // fallback here — it draws on the scarce 30/min Search secondary limit and
+        // would pause the whole dashboard for marginal coverage of stale merges.
+        const merged = await fetchMergedPullRequestsFromList(repo);
+        return mapLimit(merged, 4, async (pr, index) => ({
+          pr,
+          files:
+            index < MERGED_PR_FILE_DETAIL_FETCH_LIMIT
+              ? await fetchPullRequestFiles(repo, pr.number)
+              : [],
+        }));
+      } catch {
+        return [];
+      }
+    },
+  );
 }
 
 function compactSha(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeMergedPullRequest(repo, item) {
@@ -2181,7 +2877,7 @@ function normalizeMergedPullRequest(repo, item) {
     headSha: pr.head?.sha || pr.headSha || "",
     mergeCommitSha: pr.merge_commit_sha || pr.mergeCommitSha || "",
     baseRefName: pr.base?.ref || pr.baseRefName || "",
-    files: Array.isArray(item?.files) ? item.files : []
+    files: Array.isArray(item?.files) ? item.files : [],
   };
 }
 
@@ -2208,11 +2904,15 @@ function runHappenedAfter(run, isoDate) {
 function cdRunMatchesPr(run, pr) {
   if (!run || !pr) return false;
   const runSha = compactSha(run.headSha);
-  const candidateShas = [pr.headSha, pr.mergeCommitSha].map(compactSha).filter(Boolean);
+  const candidateShas = [pr.headSha, pr.mergeCommitSha]
+    .map(compactSha)
+    .filter(Boolean);
   if (runSha && candidateShas.includes(runSha)) return true;
   const branch = String(run.branch || "").toLowerCase();
   const base = String(pr.baseRefName || "").toLowerCase();
-  return Boolean(branch && base && branch === base && runHappenedAfter(run, pr.mergedAt));
+  return Boolean(
+    branch && base && branch === base && runHappenedAfter(run, pr.mergedAt),
+  );
 }
 
 function traceStatusRank(status) {
@@ -2220,10 +2920,14 @@ function traceStatusRank(status) {
 }
 
 function sortTraces(a, b) {
-  return traceStatusRank(a.status) - traceStatusRank(b.status) ||
-    String(b.lastEvidenceAt || b.startedAt || "").localeCompare(String(a.lastEvidenceAt || a.startedAt || "")) ||
+  return (
+    traceStatusRank(a.status) - traceStatusRank(b.status) ||
+    String(b.lastEvidenceAt || b.startedAt || "").localeCompare(
+      String(a.lastEvidenceAt || a.startedAt || ""),
+    ) ||
     String(a.repo || "").localeCompare(String(b.repo || "")) ||
-    Number(a.prNumber || 0) - Number(b.prNumber || 0);
+    Number(a.prNumber || 0) - Number(b.prNumber || 0)
+  );
 }
 
 function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
@@ -2233,7 +2937,7 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
     traceStage("ci_complete", "CI complete", "pending"),
     traceStage("merged", "Merged", "pending"),
     traceStage("cd_started", "CD started", "pending"),
-    traceStage("prod_complete", "Production complete", "pending")
+    traceStage("prod_complete", "Production complete", "pending"),
   ];
   const base = {
     id: `${pr.repo}#${pr.number}`,
@@ -2249,9 +2953,16 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
     startedAt,
     lastEvidenceAt: pr.updatedAt || startedAt,
     nextAction: { label: "Open PR", url: pr.url },
-    evidence: [traceEvidence("pull_request", `${pr.numberLabel} opened`, pr.url, startedAt)],
+    evidence: [
+      traceEvidence(
+        "pull_request",
+        `${pr.numberLabel} opened`,
+        pr.url,
+        startedAt,
+      ),
+    ],
     rule: { source: "auto", maxStageAgeMinutes: TRACE_CI_SLA_MS / 60000 },
-    stages: baseStages
+    stages: baseStages,
   };
 
   if (pr.hasConflict) {
@@ -2260,8 +2971,11 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
       stage: "merged",
       status: "flagged",
       severity: "high",
-      reason: "Pull request has merge conflicts before it can continue toward production.",
-      stages: baseStages.map((stage) => stage.key === "merged" ? { ...stage, status: "blocked" } : stage)
+      reason:
+        "Pull request has merge conflicts before it can continue toward production.",
+      stages: baseStages.map((stage) =>
+        stage.key === "merged" ? { ...stage, status: "blocked" } : stage,
+      ),
     };
   }
   if (pr.state === "fail") {
@@ -2270,8 +2984,12 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
       stage: "ci_complete",
       status: "flagged",
       severity: "critical",
-      reason: pr.failureReason || "CI failed before this PR could continue toward production.",
-      stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: "blocked" } : stage)
+      reason:
+        pr.failureReason ||
+        "CI failed before this PR could continue toward production.",
+      stages: baseStages.map((stage) =>
+        stage.key === "ci_complete" ? { ...stage, status: "blocked" } : stage,
+      ),
     };
   }
   if (pr.state === "running") {
@@ -2281,8 +2999,14 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
       stage: "ci_complete",
       status: stale ? "flagged" : "active",
       severity: stale ? "medium" : "low",
-      reason: stale ? "CI is still running past the expected window." : "CI is still running.",
-      stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: stale ? "blocked" : "active" } : stage)
+      reason: stale
+        ? "CI is still running past the expected window."
+        : "CI is still running.",
+      stages: baseStages.map((stage) =>
+        stage.key === "ci_complete"
+          ? { ...stage, status: stale ? "blocked" : "active" }
+          : stage,
+      ),
     };
   }
   return {
@@ -2291,7 +3015,9 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
     status: "active",
     severity: "low",
     reason: "PR is ready, but has not merged and reached production yet.",
-    stages: baseStages.map((stage) => stage.key === "ci_complete" ? { ...stage, status: "complete" } : stage)
+    stages: baseStages.map((stage) =>
+      stage.key === "ci_complete" ? { ...stage, status: "complete" } : stage,
+    ),
   };
 }
 
@@ -2300,17 +3026,28 @@ function buildOpenPullRequestTrace(pr, { now = Date.now() } = {}) {
 // should not be flagged for "no matching production CD run". Matched on the
 // basename so the path/directory does not matter (e.g. docs/CHANGELOG.md).
 function isDeployNeutralFile(filename) {
-  const path = String(filename || "").replaceAll("\\", "/").trim().toLowerCase();
+  const path = String(filename || "")
+    .replaceAll("\\", "/")
+    .trim()
+    .toLowerCase();
   if (!path) return false;
   const base = path.split("/").pop();
   // Release notes and repo metadata: CHANGELOG.md, HISTORY, AUTHORS, LICENSE, etc.
   // Only a documentation/plain-text extension (or none) counts, so a code file
   // that happens to share the name (e.g. changelog.css) is not treated as neutral.
-  if (/^(changelog|changes|history|releases?|release[-_.]?notes|readme|authors|contributors|codeowners|license|licence|copying|notice|contributing|code[-_]of[-_]conduct|security|support|funding)(\.(md|markdown|mdx|txt|rst|adoc))?$/.test(base)) {
+  if (
+    /^(changelog|changes|history|releases?|release[-_.]?notes|readme|authors|contributors|codeowners|license|licence|copying|notice|contributing|code[-_]of[-_]conduct|security|support|funding)(\.(md|markdown|mdx|txt|rst|adoc))?$/.test(
+      base,
+    )
+  ) {
     return true;
   }
   // Dotfiles that only affect tooling/repo hygiene, never the deployed app.
-  if (/^\.(gitignore|gitattributes|editorconfig|npmignore|nvmrc|prettierignore|prettierrc|gitkeep)$/.test(base)) {
+  if (
+    /^\.(gitignore|gitattributes|editorconfig|npmignore|nvmrc|prettierignore|prettierrc|gitkeep)$/.test(
+      base,
+    )
+  ) {
     return true;
   }
   return false;
@@ -2321,27 +3058,60 @@ function isDeployNeutralFile(filename) {
 // suppress a flag without positive evidence the PR could not have deployed.
 function mergedPrIsDeployNeutral(files = []) {
   if (!Array.isArray(files) || files.length === 0) return false;
-  return files.every((file) => isDeployNeutralFile(file?.filename || file?.path || ""));
+  return files.every((file) =>
+    isDeployNeutralFile(file?.filename || file?.path || ""),
+  );
 }
 
-function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd = true } = {}) {
+function buildMergedPullRequestTrace(
+  pr,
+  cdRows,
+  { now = Date.now(), includeCd = true } = {},
+) {
   const startedAt = pr.mergedAt || pr.closedAt || new Date(now).toISOString();
-  const matching = cdRows.filter((run) => cdRunMatchesPr(run, pr)).sort(sortByCreatedDesc);
-  const failures = matching.filter((run) => run.outcome === "failure" || FAILED_RUN_CONCLUSIONS.has(run.conclusion));
+  const matching = cdRows
+    .filter((run) => cdRunMatchesPr(run, pr))
+    .sort(sortByCreatedDesc);
+  const failures = matching.filter(
+    (run) =>
+      run.outcome === "failure" || FAILED_RUN_CONCLUSIONS.has(run.conclusion),
+  );
   const skipped = matching.filter((run) => run.outcome === "skipped");
   const successes = matching.filter((run) => run.outcome === "success");
-  const running = matching.filter((run) => RUNNING_RUN_STATUSES.has(run.status));
+  const running = matching.filter((run) =>
+    RUNNING_RUN_STATUSES.has(run.status),
+  );
   const latest = matching[0] || null;
   const evidence = [
-    traceEvidence("pull_request", `${pr.numberLabel} merged`, pr.url, startedAt),
-    ...matching.slice(0, 4).map((run) => traceEvidence("workflow_run", `${run.workflow} ${run.runNumber}`, run.url, run.createdAt))
+    traceEvidence(
+      "pull_request",
+      `${pr.numberLabel} merged`,
+      pr.url,
+      startedAt,
+    ),
+    ...matching
+      .slice(0, 4)
+      .map((run) =>
+        traceEvidence(
+          "workflow_run",
+          `${run.workflow} ${run.runNumber}`,
+          run.url,
+          run.createdAt,
+        ),
+      ),
   ];
   const stages = [
     traceStage("pr_opened", "PR opened", "complete", "", pr.url),
     traceStage("ci_complete", "CI complete", "complete"),
     traceStage("merged", "Merged", "complete", startedAt, pr.url),
-    traceStage("cd_started", "CD started", matching.length ? "complete" : "missing", latest?.createdAt || "", latest?.url || ""),
-    traceStage("prod_complete", "Production complete", "missing")
+    traceStage(
+      "cd_started",
+      "CD started",
+      matching.length ? "complete" : "missing",
+      latest?.createdAt || "",
+      latest?.url || "",
+    ),
+    traceStage("prod_complete", "Production complete", "missing"),
   ];
   const base = {
     id: `${pr.repo}#${pr.number}`,
@@ -2361,8 +3131,8 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       source: "auto",
       productionEnvironmentPattern: "prod|production",
       cdWorkflowPattern: CD_WORKFLOW_PATTERN.source,
-      maxStageAgeMinutes: TRACE_PROD_COMPLETE_SLA_MS / 60000
-    }
+      maxStageAgeMinutes: TRACE_PROD_COMPLETE_SLA_MS / 60000,
+    },
   };
 
   // A PR that only touches changelog/docs/repo-metadata never deploys, so the
@@ -2377,7 +3147,9 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       severity: "low",
       reason: "CD audit is off, so production completion cannot be verified.",
       nextAction: { label: "Turn on CD audit", url: "" },
-      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "unknown" } : stage)
+      stages: stages.map((stage) =>
+        stage.key === "prod_complete" ? { ...stage, status: "unknown" } : stage,
+      ),
     };
   }
 
@@ -2390,8 +3162,18 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       severity: "low",
       reason: "Production CD completed successfully.",
       nextAction: { label: "Open deploy run", url: success.url },
-      lastEvidenceAt: success.updatedAt || success.createdAt || base.lastEvidenceAt,
-      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "complete", at: success.createdAt, url: success.url } : stage)
+      lastEvidenceAt:
+        success.updatedAt || success.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) =>
+        stage.key === "prod_complete"
+          ? {
+              ...stage,
+              status: "complete",
+              at: success.createdAt,
+              url: success.url,
+            }
+          : stage,
+      ),
     };
   }
 
@@ -2402,10 +3184,21 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       stage: "prod_complete",
       status: "flagged",
       severity: "critical",
-      reason: failed.failureReason || "Production CD failed after this PR merged.",
+      reason:
+        failed.failureReason || "Production CD failed after this PR merged.",
       nextAction: { label: "Open failed run", url: failed.url },
-      lastEvidenceAt: failed.updatedAt || failed.createdAt || base.lastEvidenceAt,
-      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "blocked", at: failed.createdAt, url: failed.url } : stage)
+      lastEvidenceAt:
+        failed.updatedAt || failed.createdAt || base.lastEvidenceAt,
+      stages: stages.map((stage) =>
+        stage.key === "prod_complete"
+          ? {
+              ...stage,
+              status: "blocked",
+              at: failed.createdAt,
+              url: failed.url,
+            }
+          : stage,
+      ),
     };
   }
 
@@ -2417,10 +3210,15 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
         stage: "prod_complete",
         status: "completed",
         severity: "low",
-        reason: "CD skipped as expected — this PR only changes changelog/docs, so production was not updated.",
+        reason:
+          "CD skipped as expected — this PR only changes changelog/docs, so production was not updated.",
         nextAction: { label: "Open skipped run", url: skip.url },
         lastEvidenceAt: skip.updatedAt || skip.createdAt || base.lastEvidenceAt,
-        stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "skipped", at: skip.createdAt, url: skip.url } : stage)
+        stages: stages.map((stage) =>
+          stage.key === "prod_complete"
+            ? { ...stage, status: "skipped", at: skip.createdAt, url: skip.url }
+            : stage,
+        ),
       };
     }
     return {
@@ -2431,7 +3229,11 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       reason: skip.skipReason || "CD was skipped; production was not updated.",
       nextAction: { label: "Open skipped run", url: skip.url },
       lastEvidenceAt: skip.updatedAt || skip.createdAt || base.lastEvidenceAt,
-      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: "blocked", at: skip.createdAt, url: skip.url } : stage)
+      stages: stages.map((stage) =>
+        stage.key === "prod_complete"
+          ? { ...stage, status: "blocked", at: skip.createdAt, url: skip.url }
+          : stage,
+      ),
     };
   }
 
@@ -2443,10 +3245,21 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       stage: "prod_complete",
       status: stale ? "flagged" : "active",
       severity: stale ? "medium" : "low",
-      reason: stale ? "CD is still running past the expected production window." : "CD is running and has not completed production yet.",
+      reason: stale
+        ? "CD is still running past the expected production window."
+        : "CD is running and has not completed production yet.",
       nextAction: { label: "Open deploy run", url: run.url },
       lastEvidenceAt: run.updatedAt || run.createdAt || base.lastEvidenceAt,
-      stages: stages.map((stage) => stage.key === "prod_complete" ? { ...stage, status: stale ? "blocked" : "active", at: run.createdAt, url: run.url } : stage)
+      stages: stages.map((stage) =>
+        stage.key === "prod_complete"
+          ? {
+              ...stage,
+              status: stale ? "blocked" : "active",
+              at: run.createdAt,
+              url: run.url,
+            }
+          : stage,
+      ),
     };
   }
 
@@ -2457,9 +3270,14 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       stage: "cd_started",
       status: "unknown",
       severity: "low",
-      reason: "No production workflow or deployment environment was detected for this repository.",
+      reason:
+        "No production workflow or deployment environment was detected for this repository.",
       nextAction: { label: "Open PR", url: pr.url },
-      stages: stages.map((stage) => stage.key === "cd_started" || stage.key === "prod_complete" ? { ...stage, status: "unknown" } : stage)
+      stages: stages.map((stage) =>
+        stage.key === "cd_started" || stage.key === "prod_complete"
+          ? { ...stage, status: "unknown" }
+          : stage,
+      ),
     };
   }
 
@@ -2469,9 +3287,14 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
       stage: "cd_started",
       status: "completed",
       severity: "low",
-      reason: "No production deploy expected — this PR only changes changelog/docs, which does not run CD.",
+      reason:
+        "No production deploy expected — this PR only changes changelog/docs, which does not run CD.",
       nextAction: { label: "Open PR", url: pr.url },
-      stages: stages.map((stage) => stage.key === "cd_started" || stage.key === "prod_complete" ? { ...stage, status: "skipped" } : stage)
+      stages: stages.map((stage) =>
+        stage.key === "cd_started" || stage.key === "prod_complete"
+          ? { ...stage, status: "skipped" }
+          : stage,
+      ),
     };
   }
 
@@ -2481,9 +3304,15 @@ function buildMergedPullRequestTrace(pr, cdRows, { now = Date.now(), includeCd =
     stage: "cd_started",
     status: overdue ? "flagged" : "active",
     severity: overdue ? "high" : "low",
-    reason: overdue ? "Merged PR has no matching production CD run yet." : "Waiting for a matching production CD run to start.",
+    reason: overdue
+      ? "Merged PR has no matching production CD run yet."
+      : "Waiting for a matching production CD run to start.",
     nextAction: { label: "Open PR", url: pr.url },
-    stages: stages.map((stage) => stage.key === "cd_started" ? { ...stage, status: overdue ? "blocked" : "active" } : stage)
+    stages: stages.map((stage) =>
+      stage.key === "cd_started"
+        ? { ...stage, status: overdue ? "blocked" : "active" }
+        : stage,
+    ),
   };
 }
 
@@ -2493,11 +3322,17 @@ function groupTraces(traces) {
     flagged: sorted.filter((trace) => trace.status === "flagged"),
     active: sorted.filter((trace) => trace.status === "active"),
     completed: sorted.filter((trace) => trace.status === "completed"),
-    unknown: sorted.filter((trace) => trace.status === "unknown")
+    unknown: sorted.filter((trace) => trace.status === "unknown"),
   };
 }
 
-function buildPipelineTraces({ pullRequests = [], mergedPullRequestsByRepo = new Map(), cdRowsByRepo = new Map(), includeCd = true, now = Date.now() } = {}) {
+function buildPipelineTraces({
+  pullRequests = [],
+  mergedPullRequestsByRepo = new Map(),
+  cdRowsByRepo = new Map(),
+  includeCd = true,
+  now = Date.now(),
+} = {}) {
   const traces = [];
   const seen = new Set();
   for (const pr of pullRequests) {
@@ -2518,23 +3353,34 @@ function buildPipelineTraces({ pullRequests = [], mergedPullRequestsByRepo = new
 }
 
 async function fetchRecentCommits(repo, branch = "") {
-  return cachedGithubValue(`recent-commits:${repo}:${branch || "default"}`, RECENT_COMMIT_CACHE_TTL_MS, async () => {
-    try {
-      const commits = await githubRestPage(`/repos/${repo}/commits`, 1, MERGED_PR_SUMMARY_LIMIT, {
-        sha: branch || undefined
-      });
-      const recent = Array.isArray(commits) ? commits.slice(0, MERGED_PR_SUMMARY_LIMIT) : [];
-      return mapLimit(recent, 4, async (commit) => {
-        try {
-          return await githubRequest(`/repos/${repo}/commits/${commit.sha}`);
-        } catch {
-          return commit;
-        }
-      });
-    } catch {
-      return [];
-    }
-  });
+  return cachedGithubValue(
+    `recent-commits:${repo}:${branch || "default"}`,
+    RECENT_COMMIT_CACHE_TTL_MS,
+    async () => {
+      try {
+        const commits = await githubRestPage(
+          `/repos/${repo}/commits`,
+          1,
+          MERGED_PR_SUMMARY_LIMIT,
+          {
+            sha: branch || undefined,
+          },
+        );
+        const recent = Array.isArray(commits)
+          ? commits.slice(0, MERGED_PR_SUMMARY_LIMIT)
+          : [];
+        return mapLimit(recent, 4, async (commit) => {
+          try {
+            return await githubRequest(`/repos/${repo}/commits/${commit.sha}`);
+          } catch {
+            return commit;
+          }
+        });
+      } catch {
+        return [];
+      }
+    },
+  );
 }
 
 async function fetchCdForRepo(repo) {
@@ -2551,27 +3397,38 @@ async function fetchCdForRepo(repo) {
   try {
     workflows = await fetchCdWorkflows(repo);
   } catch {
-  return {
-    failed: markIgnoredRuns(failed),
-    finished,
-    running: markIgnoredRuns(running)
-  };
+    return {
+      failed: markIgnoredRuns(failed),
+      finished,
+      running: markIgnoredRuns(running),
+    };
   }
   for (const workflow of workflows) {
     try {
-      const recentWorkflowRuns = await fetchWorkflowRuns(repo, workflow.id, { per_page: 20 });
-      const completedRuns = recentWorkflowRuns.filter((run) => run.status === "completed");
+      const recentWorkflowRuns = await fetchWorkflowRuns(repo, workflow.id, {
+        per_page: 20,
+      });
+      const completedRuns = recentWorkflowRuns.filter(
+        (run) => run.status === "completed",
+      );
       for (const failedRun of selectFailedCdRuns(completedRuns)) {
         const failedAt = failedRun.updated_at || failedRun.created_at;
-        const failureReason = await fetchWorkflowRunFailureReason(repo, failedRun);
+        const failureReason = await fetchWorkflowRunFailureReason(
+          repo,
+          failedRun,
+        );
         failureReasons.set(failedRun.id, failureReason);
-        const supersedingRun = findSupersedingSuccessfulRun(completedRuns, failedRun);
+        const supersedingRun = findSupersedingSuccessfulRun(
+          completedRuns,
+          failedRun,
+        );
         const resolvedBy = supersedingRun
           ? {
               runNumber: `#${supersedingRun.run_number}`,
               url: supersedingRun.html_url || "",
               conclusion: supersedingRun.conclusion || "",
-              createdAt: supersedingRun.updated_at || supersedingRun.created_at || ""
+              createdAt:
+                supersedingRun.updated_at || supersedingRun.created_at || "",
             }
           : null;
         failed.push({
@@ -2588,7 +3445,7 @@ async function fetchCdForRepo(repo) {
           headSha: failedRun.head_sha || failedRun.head_commit?.id || "",
           title: failedRun.display_title || "",
           url: failedRun.html_url || "",
-          resolvedBy
+          resolvedBy,
         });
       }
       for (const [runIndex, run] of completedRuns.entries()) {
@@ -2596,18 +3453,23 @@ async function fetchCdForRepo(repo) {
         if (!isWithinFinishedCdWindow(finishedAt)) continue;
         const outcome = runOutcome(run);
         const failureReason = FAILED_RUN_CONCLUSIONS.has(run.conclusion)
-          ? failureReasons.get(run.id) || await fetchWorkflowRunFailureReason(repo, run)
+          ? failureReasons.get(run.id) ||
+            (await fetchWorkflowRunFailureReason(repo, run))
           : "";
         if (failureReason) failureReasons.set(run.id, failureReason);
-        const skipReason = outcome === "skipped"
-          ? await fetchWorkflowRunSkipReason(repo, run)
-          : "";
+        const skipReason =
+          outcome === "skipped"
+            ? await fetchWorkflowRunSkipReason(repo, run)
+            : "";
         deploymentTargetsPromise ||= fetchRecentDeploymentTargets(repo);
         const deploymentTargets = await deploymentTargetsPromise;
-        let deployTarget = deploymentTargets.get(run.head_branch || "") || deploymentTargets.get("") || {};
+        let deployTarget =
+          deploymentTargets.get(run.head_branch || "") ||
+          deploymentTargets.get("") ||
+          {};
         if (!deployTarget.url) {
           repoProductionTargetPromise ||= fetchRepoProductionTarget(repo);
-          deployTarget = await repoProductionTargetPromise || {};
+          deployTarget = (await repoProductionTargetPromise) || {};
         }
         const changeKey = run.head_sha || run.head_commit?.id || run.id;
         if (!changeSummaries.has(changeKey)) {
@@ -2615,13 +3477,25 @@ async function fetchCdForRepo(repo) {
           const mergedPullRequests = await mergedPullRequestsPromise;
           let recentCommits = [];
           if (!mergedPullRequests.length) {
-            recentCommitsPromise ||= fetchRecentCommits(repo, run.head_branch || "");
+            recentCommitsPromise ||= fetchRecentCommits(
+              repo,
+              run.head_branch || "",
+            );
             recentCommits = await recentCommitsPromise;
           }
-          const previousRun = completedRuns.slice(runIndex + 1).find((item) => item.head_sha || item.head_commit?.id);
+          const previousRun = completedRuns
+            .slice(runIndex + 1)
+            .find((item) => item.head_sha || item.head_commit?.id);
           changeSummaries.set(
             changeKey,
-            await fetchWorkflowRunChangeSummary(repo, run, deployTarget, previousRun, mergedPullRequests, recentCommits)
+            await fetchWorkflowRunChangeSummary(
+              repo,
+              run,
+              deployTarget,
+              previousRun,
+              mergedPullRequests,
+              recentCommits,
+            ),
           );
         }
         finished.push({
@@ -2640,11 +3514,13 @@ async function fetchCdForRepo(repo) {
           headSha: run.head_sha || run.head_commit?.id || "",
           title: run.display_title || "",
           url: run.html_url || "",
-          changeSummary: changeSummaries.get(changeKey)
+          changeSummary: changeSummaries.get(changeKey),
         });
       }
 
-      for (const run of recentWorkflowRuns.filter((item) => RUNNING_RUN_STATUSES.has(item.status))) {
+      for (const run of recentWorkflowRuns.filter((item) =>
+        RUNNING_RUN_STATUSES.has(item.status),
+      )) {
         running.push({
           runId: run.id || null,
           createdAt: run.created_at,
@@ -2656,7 +3532,7 @@ async function fetchCdForRepo(repo) {
           branch: run.head_branch || "",
           headSha: run.head_sha || run.head_commit?.id || "",
           title: run.display_title || "",
-          url: run.html_url || ""
+          url: run.html_url || "",
         });
       }
     } catch {
@@ -2667,54 +3543,76 @@ async function fetchCdForRepo(repo) {
 }
 
 async function fetchActionsForRepo(repo) {
-  return cachedGithubValue(`actions:${repo}`, RUNNING_ACTION_CACHE_TTL_MS, async () => {
-    try {
-      const json = await githubRequest(`/repos/${repo}/actions/runs`, { query: { per_page: 20 } });
-      const runs = json?.workflow_runs || [];
-      const running = runs
-        .filter((run) => RUNNING_RUN_STATUSES.has(run.status))
-        .filter((run) => !isCdWorkflowRun(run))
-        .map((run) => ({
-          kind: "workflowRun",
-          createdAt: run.created_at || "",
-          repo,
-          workflow: run.name || "Workflow",
-          runNumber: `#${run.run_number}`,
-          status: run.status || "",
-          branch: run.head_branch || "",
-          ...(run.head_sha || run.head_commit?.id ? { headSha: run.head_sha || run.head_commit?.id } : {}),
-          ...((run.pull_requests || []).some((item) => item.number)
-            ? { pullRequestNumbers: (run.pull_requests || []).map((item) => item.number).filter(Boolean) }
-            : {}),
-          title: run.display_title || run.name || "",
-          url: run.html_url || ""
-        }));
-      const failed = await mapLimit(selectFailedActionRuns(runs), 4, async (run) => ({
-        kind: "workflowRun",
-        createdAt: run.updated_at || run.created_at || "",
-        repo,
-        workflow: run.name || "Workflow",
-        runNumber: `#${run.run_number}`,
-        status: run.status || "",
-        conclusion: run.conclusion || "",
-        branch: run.head_branch || "",
-        ...(run.head_sha || run.head_commit?.id ? { headSha: run.head_sha || run.head_commit?.id } : {}),
-        ...((run.pull_requests || []).some((item) => item.number)
-          ? { pullRequestNumbers: (run.pull_requests || []).map((item) => item.number).filter(Boolean) }
-          : {}),
-        ...(isDependabotWorkflowRun(run) ? { dependabot: true } : {}),
-        title: run.display_title || run.name || "",
-        url: run.html_url || "",
-        failureReason: await fetchWorkflowRunFailureReason(repo, run)
-      }));
-      return {
-        failed: markIgnoredRuns(failed),
-        running: markIgnoredRuns(running)
-      };
-    } catch {
-      return { failed: [], running: [] };
-    }
-  });
+  return cachedGithubValue(
+    `actions:${repo}`,
+    RUNNING_ACTION_CACHE_TTL_MS,
+    async () => {
+      try {
+        const json = await githubRequest(`/repos/${repo}/actions/runs`, {
+          query: { per_page: 20 },
+        });
+        const runs = json?.workflow_runs || [];
+        const running = runs
+          .filter((run) => RUNNING_RUN_STATUSES.has(run.status))
+          .filter((run) => !isCdWorkflowRun(run))
+          .map((run) => ({
+            kind: "workflowRun",
+            createdAt: run.created_at || "",
+            repo,
+            workflow: run.name || "Workflow",
+            runNumber: `#${run.run_number}`,
+            status: run.status || "",
+            branch: run.head_branch || "",
+            ...(run.head_sha || run.head_commit?.id
+              ? { headSha: run.head_sha || run.head_commit?.id }
+              : {}),
+            ...((run.pull_requests || []).some((item) => item.number)
+              ? {
+                  pullRequestNumbers: (run.pull_requests || [])
+                    .map((item) => item.number)
+                    .filter(Boolean),
+                }
+              : {}),
+            title: run.display_title || run.name || "",
+            url: run.html_url || "",
+          }));
+        const failed = await mapLimit(
+          selectFailedActionRuns(runs),
+          4,
+          async (run) => ({
+            kind: "workflowRun",
+            createdAt: run.updated_at || run.created_at || "",
+            repo,
+            workflow: run.name || "Workflow",
+            runNumber: `#${run.run_number}`,
+            status: run.status || "",
+            conclusion: run.conclusion || "",
+            branch: run.head_branch || "",
+            ...(run.head_sha || run.head_commit?.id
+              ? { headSha: run.head_sha || run.head_commit?.id }
+              : {}),
+            ...((run.pull_requests || []).some((item) => item.number)
+              ? {
+                  pullRequestNumbers: (run.pull_requests || [])
+                    .map((item) => item.number)
+                    .filter(Boolean),
+                }
+              : {}),
+            ...(isDependabotWorkflowRun(run) ? { dependabot: true } : {}),
+            title: run.display_title || run.name || "",
+            url: run.html_url || "",
+            failureReason: await fetchWorkflowRunFailureReason(repo, run),
+          }),
+        );
+        return {
+          failed: markIgnoredRuns(failed),
+          running: markIgnoredRuns(running),
+        };
+      } catch {
+        return { failed: [], running: [] };
+      }
+    },
+  );
 }
 
 function workflowRunMatchesPullRequest(run, pr) {
@@ -2724,18 +3622,28 @@ function workflowRunMatchesPullRequest(run, pr) {
   return false;
 }
 
-function applyActionRunEvidenceToPullRequests(pullRequests, { runningActions = [], failedActions = [] } = {}) {
+function applyActionRunEvidenceToPullRequests(
+  pullRequests,
+  { runningActions = [], failedActions = [] } = {},
+) {
   if (!runningActions.length && !failedActions.length) return pullRequests;
   return pullRequests.map((pr) => {
     if (pr.hasConflict) return pr;
-    const running = runningActions.filter((run) => workflowRunMatchesPullRequest(run, pr));
-    const failed = failedActions.filter((run) => workflowRunMatchesPullRequest(run, pr));
+    const running = runningActions.filter((run) =>
+      workflowRunMatchesPullRequest(run, pr),
+    );
+    const failed = failedActions.filter((run) =>
+      workflowRunMatchesPullRequest(run, pr),
+    );
     if (running.length) {
       return {
         ...pr,
         state: "running",
         checkCount: Math.max(pr.checkCount || 0, running.length),
-        runningChecks: running.map((run) => `${run.workflow} ${run.runNumber} [${run.status || "RUNNING"}]`)
+        runningChecks: running.map(
+          (run) =>
+            `${run.workflow} ${run.runNumber} [${run.status || "RUNNING"}]`,
+        ),
       };
     }
     if (failed.length && pr.state === "pass" && pr.checkCount === 0) {
@@ -2744,7 +3652,11 @@ function applyActionRunEvidenceToPullRequests(pullRequests, { runningActions = [
         state: "fail",
         checkCount: Math.max(pr.checkCount || 0, failed.length),
         failedChecks: failed.map((run) => `${run.workflow} ${run.runNumber}`),
-        failureReason: failed.map((run) => failureDetailFromRun(run)).filter(Boolean).join(", ") || "CI failed"
+        failureReason:
+          failed
+            .map((run) => failureDetailFromRun(run))
+            .filter(Boolean)
+            .join(", ") || "CI failed",
       };
     }
     return pr;
@@ -2752,55 +3664,72 @@ function applyActionRunEvidenceToPullRequests(pullRequests, { runningActions = [
 }
 
 function failureDetailFromRun(run) {
-  const conclusion = run?.conclusion ? FAILURE_REASON_LABELS[run.conclusion] || run.conclusion : "";
+  const conclusion = run?.conclusion
+    ? FAILURE_REASON_LABELS[run.conclusion] || run.conclusion
+    : "";
   const title = [run?.workflow, run?.runNumber].filter(Boolean).join(" ");
   return [title, conclusion].filter(Boolean).join(" ");
 }
 
 async function fetchRunningDeploymentsForRepo(repo) {
-  return cachedGithubValue(`running-deployments:${repo}`, RUNNING_DEPLOYMENT_CACHE_TTL_MS, async () => {
-    const running = [];
-    let deployments = [];
-    try {
-      deployments = await githubRestAll(`/repos/${repo}/deployments`, (json) => (Array.isArray(json) ? json : []), 20);
-    } catch {
-      return running;
-    }
-    for (const deployment of deployments.slice(0, 20)) {
-      if (!deployment.statuses_url) continue;
+  return cachedGithubValue(
+    `running-deployments:${repo}`,
+    RUNNING_DEPLOYMENT_CACHE_TTL_MS,
+    async () => {
+      const running = [];
+      let deployments = [];
       try {
-        const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
-        const latest = Array.isArray(statuses) ? statuses[0] : null;
-        if (latest && RUNNING_DEPLOYMENT_STATES.has(latest.state)) {
-          running.push({
-            createdAt: latest.created_at || deployment.created_at || "",
-            repo,
-            environment: deployment.environment || "",
-            ref: deployment.ref || "",
-            state: latest.state || "",
-            task: deployment.task || "",
-            description: latest.description || "",
-            url: latest.target_url || latest.log_url || deployment.url || ""
-          });
-        }
+        deployments = await githubRestAll(
+          `/repos/${repo}/deployments`,
+          (json) => (Array.isArray(json) ? json : []),
+          20,
+        );
       } catch {
-        continue;
+        return running;
       }
-    }
-    return running;
-  });
+      for (const deployment of deployments.slice(0, 20)) {
+        if (!deployment.statuses_url) continue;
+        try {
+          const statuses = await githubRestPage(deployment.statuses_url, 1, 1);
+          const latest = Array.isArray(statuses) ? statuses[0] : null;
+          if (latest && RUNNING_DEPLOYMENT_STATES.has(latest.state)) {
+            running.push({
+              createdAt: latest.created_at || deployment.created_at || "",
+              repo,
+              environment: deployment.environment || "",
+              ref: deployment.ref || "",
+              state: latest.state || "",
+              task: deployment.task || "",
+              description: latest.description || "",
+              url: latest.target_url || latest.log_url || deployment.url || "",
+            });
+          }
+        } catch {
+          continue;
+        }
+      }
+      return running;
+    },
+  );
 }
 
 async function fetchBusyRepoRunners(repo) {
   try {
-    const runners = await githubRestAll(`/repos/${repo}/actions/runners`, (json) => json?.runners || []);
-    return runners.filter((runner) => runner.busy).map((runner) => ({
-      level: "REPO",
-      scope: repo,
-      name: runner.name,
-      status: runner.status || "",
-      labels: (runner.labels || []).map((label) => label.name).filter(Boolean)
-    }));
+    const runners = await githubRestAll(
+      `/repos/${repo}/actions/runners`,
+      (json) => json?.runners || [],
+    );
+    return runners
+      .filter((runner) => runner.busy)
+      .map((runner) => ({
+        level: "REPO",
+        scope: repo,
+        name: runner.name,
+        status: runner.status || "",
+        labels: (runner.labels || [])
+          .map((label) => label.name)
+          .filter(Boolean),
+      }));
   } catch {
     return [];
   }
@@ -2808,61 +3737,91 @@ async function fetchBusyRepoRunners(repo) {
 
 async function fetchBusyOrgRunners(owner) {
   try {
-    const runners = await githubRestAll(`/orgs/${owner}/actions/runners`, (json) => json?.runners || []);
-    return runners.filter((runner) => runner.busy).map((runner) => ({
-      level: "ORG",
-      scope: owner,
-      name: runner.name,
-      status: runner.status || "",
-      labels: (runner.labels || []).map((label) => label.name).filter(Boolean)
-    }));
+    const runners = await githubRestAll(
+      `/orgs/${owner}/actions/runners`,
+      (json) => json?.runners || [],
+    );
+    return runners
+      .filter((runner) => runner.busy)
+      .map((runner) => ({
+        level: "ORG",
+        scope: owner,
+        name: runner.name,
+        status: runner.status || "",
+        labels: (runner.labels || [])
+          .map((label) => label.name)
+          .filter(Boolean),
+      }));
   } catch {
     return [];
   }
 }
 
-async function fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners: ownerFilter }) {
+async function fetchBusyRunners({
+  includeRepoRunners,
+  repos,
+  pullRequests,
+  mode,
+  me,
+  jobs,
+  owners: ownerFilter,
+}) {
   const ownerSet = new Set();
   for (const pr of pullRequests) ownerSet.add(pr.repo.split("/")[0]);
   for (const repo of repos) ownerSet.add(repo.split("/")[0]);
   if (mode === "all") {
-    for (const owner of await selectedOwners(me, ownerFilter)) ownerSet.add(owner);
+    for (const owner of await selectedOwners(me, ownerFilter))
+      ownerSet.add(owner);
   }
   if (mode === "owned") ownerSet.add(me);
 
-  const orgGroups = await mapLimit([...ownerSet].sort(), jobs, fetchBusyOrgRunners);
+  const orgGroups = await mapLimit(
+    [...ownerSet].sort(),
+    jobs,
+    fetchBusyOrgRunners,
+  );
   const repoGroups = includeRepoRunners
     ? await mapLimit(repos, jobs, fetchBusyRepoRunners)
     : [];
   return uniqueBy([...orgGroups.flat(), ...repoGroups.flat()], (runner) =>
-    [runner.level, runner.scope, runner.name].join(":")
+    [runner.level, runner.scope, runner.name].join(":"),
   );
 }
 
 // The REST check-runs API reports lowercase `status`/`conclusion`; the GraphQL
 // checks used elsewhere report uppercase enums. Normalise before comparing.
 function hasFailedCiSignal(checkRuns, statuses) {
-  const failedCheckRun = (checkRuns || []).some((run) =>
-    String(run?.status || "").toUpperCase() === "COMPLETED" &&
-    FAILED_CHECK_CONCLUSIONS.has(String(run?.conclusion || "").toUpperCase())
+  const failedCheckRun = (checkRuns || []).some(
+    (run) =>
+      String(run?.status || "").toUpperCase() === "COMPLETED" &&
+      FAILED_CHECK_CONCLUSIONS.has(String(run?.conclusion || "").toUpperCase()),
   );
-  return failedCheckRun ||
-    (statuses || []).some((status) => FAILED_CHECK_CONCLUSIONS.has(String(status?.state || "").toUpperCase()));
+  return (
+    failedCheckRun ||
+    (statuses || []).some((status) =>
+      FAILED_CHECK_CONCLUSIONS.has(String(status?.state || "").toUpperCase()),
+    )
+  );
 }
 
-async function fetchDependabotWorkloadForRepo(repo, { includeRuns = true } = {}) {
+async function fetchDependabotWorkloadForRepo(
+  repo,
+  { includeRuns = true } = {},
+) {
   const errors = [];
   const pullRequests = await githubRestAllWithinQuota(
     `/repos/${repo}/pulls`,
     (json) => (Array.isArray(json) ? json : []),
     100,
-    { state: "open" }
+    { state: "open" },
   ).catch((error) => {
     errors.push(`${repo} pull requests: ${error.message}`);
     return [];
   });
 
-  const dependabotPrs = pullRequests.filter((pr) => isDependabotLogin(pr.user?.login));
+  const dependabotPrs = pullRequests.filter((pr) =>
+    isDependabotLogin(pr.user?.login),
+  );
   const failingPrs = [];
 
   for (const pr of dependabotPrs) {
@@ -2872,12 +3831,21 @@ async function fetchDependabotWorkloadForRepo(repo, { includeRuns = true } = {})
     if (!headSha) continue;
     try {
       const [checkRunsJson, statusJson] = await Promise.all([
-        githubRequest(`/repos/${repo}/commits/${headSha}/check-runs`).catch(() => null),
-        githubRequest(`/repos/${repo}/commits/${headSha}/status`).catch(() => null)
+        githubRequest(`/repos/${repo}/commits/${headSha}/check-runs`).catch(
+          () => null,
+        ),
+        githubRequest(`/repos/${repo}/commits/${headSha}/status`).catch(
+          () => null,
+        ),
       ]);
 
       if (hasFailedCiSignal(checkRunsJson?.check_runs, statusJson?.statuses)) {
-        failingPrs.push({ repo, number: pr.number, title: pr.title || "", url: pr.html_url || "" });
+        failingPrs.push({
+          repo,
+          number: pr.number,
+          title: pr.title || "",
+          url: pr.html_url || "",
+        });
       }
     } catch (error) {
       errors.push(`${repo} PR #${pr.number} CI check status: ${error.message}`);
@@ -2886,77 +3854,115 @@ async function fetchDependabotWorkloadForRepo(repo, { includeRuns = true } = {})
 
   if (!includeRuns) return { pullRequests: failingPrs, runs: [], errors };
 
-  const runGroups = await mapLimit([...RUNNING_RUN_STATUSES], 2, async (status) => {
-    try {
-      return await githubRestAllWithinQuota(
-        `/repos/${repo}/actions/runs`,
-        (json) => json?.workflow_runs || [],
-        100,
-        { status }
-      );
-    } catch (error) {
-      errors.push(`${repo} ${status} runs: ${error.message}`);
-      return [];
-    }
-  });
+  const runGroups = await mapLimit(
+    [...RUNNING_RUN_STATUSES],
+    2,
+    async (status) => {
+      try {
+        return await githubRestAllWithinQuota(
+          `/repos/${repo}/actions/runs`,
+          (json) => json?.workflow_runs || [],
+          100,
+          { status },
+        );
+      } catch (error) {
+        errors.push(`${repo} ${status} runs: ${error.message}`);
+        return [];
+      }
+    },
+  );
   return {
     pullRequests: failingPrs,
-    runs: uniqueBy(runGroups.flat().filter(isDependabotWorkflowRun), (run) => run.id)
-      .map((run) => ({
-        repo,
-        runId: run.id,
-        workflow: run.name || "Workflow",
-        url: run.html_url || ""
-      })),
-    errors
+    runs: uniqueBy(
+      runGroups.flat().filter(isDependabotWorkflowRun),
+      (run) => run.id,
+    ).map((run) => ({
+      repo,
+      runId: run.id,
+      workflow: run.name || "Workflow",
+      url: run.html_url || "",
+    })),
+    errors,
   };
 }
 
-async function cleanupDependabotWorkload({ repos, jobs = 4, cancelRuns = true }) {
+async function cleanupDependabotWorkload({
+  repos,
+  jobs = 4,
+  cancelRuns = true,
+}) {
   const groups = await mapLimit(repos || [], jobs, (repo) =>
-    fetchDependabotWorkloadForRepo(repo, { includeRuns: cancelRuns })
+    fetchDependabotWorkloadForRepo(repo, { includeRuns: cancelRuns }),
   );
-  const pullRequests = uniqueBy(groups.flatMap((group) => group.pullRequests), (pr) => `${pr.repo}#${pr.number}`);
-  const runs = uniqueBy(groups.flatMap((group) => group.runs), (run) => `${run.repo}:${run.runId}`);
+  const pullRequests = uniqueBy(
+    groups.flatMap((group) => group.pullRequests),
+    (pr) => `${pr.repo}#${pr.number}`,
+  );
+  const runs = uniqueBy(
+    groups.flatMap((group) => group.runs),
+    (run) => `${run.repo}:${run.runId}`,
+  );
   const errors = groups.flatMap((group) => group.errors || []);
   if (currentQuotaIsBlocked()) {
-    errors.push("GitHub API quota became too low before Dependabot mutations started.");
+    errors.push(
+      "GitHub API quota became too low before Dependabot mutations started.",
+    );
     return { closedPullRequests: [], cancelledRuns: [], errors };
   }
 
-  const cancelledRuns = (await mapLimit(runs, jobs, async (run) => {
-    try {
-      if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for cancellation.");
-      await githubRequest(`/repos/${run.repo}/actions/runs/${run.runId}/cancel`, { method: "POST" });
-      return run;
-    } catch (error) {
-      if (error.status !== 404 && error.status !== 409) {
-        errors.push(`${run.repo} run ${run.runId}: ${error.message}`);
+  const cancelledRuns = (
+    await mapLimit(runs, jobs, async (run) => {
+      try {
+        if (currentQuotaIsBlocked())
+          throw new HttpError(
+            429,
+            "GitHub API quota is too low for cancellation.",
+          );
+        await githubRequest(
+          `/repos/${run.repo}/actions/runs/${run.runId}/cancel`,
+          { method: "POST" },
+        );
+        return run;
+      } catch (error) {
+        if (error.status !== 404 && error.status !== 409) {
+          errors.push(`${run.repo} run ${run.runId}: ${error.message}`);
+        }
+        return null;
       }
-      return null;
-    }
-  })).filter(Boolean);
+    })
+  ).filter(Boolean);
 
-  const closedPullRequests = (await mapLimit(pullRequests, jobs, async (pr) => {
-    try {
-      if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for pull request closure.");
-      const result = await githubRequest(`/repos/${pr.repo}/pulls/${pr.number}`, {
-        method: "PATCH",
-        body: { state: "closed" }
-      });
-      if (result?.state !== "closed") throw new Error("GitHub did not close the pull request");
-      autoMergeState.candidates.delete(autoMergeKey(pr.repo, pr.number));
-      return pr;
-    } catch (error) {
-      errors.push(`${pr.repo}#${pr.number}: ${error.message}`);
-      return null;
-    }
-  })).filter(Boolean);
+  const closedPullRequests = (
+    await mapLimit(pullRequests, jobs, async (pr) => {
+      try {
+        if (currentQuotaIsBlocked())
+          throw new HttpError(
+            429,
+            "GitHub API quota is too low for pull request closure.",
+          );
+        const result = await githubRequest(
+          `/repos/${pr.repo}/pulls/${pr.number}`,
+          {
+            method: "PATCH",
+            body: { state: "closed" },
+          },
+        );
+        if (result?.state !== "closed")
+          throw new Error("GitHub did not close the pull request");
+        autoMergeState.candidates.delete(autoMergeKey(pr.repo, pr.number));
+        return pr;
+      } catch (error) {
+        errors.push(`${pr.repo}#${pr.number}: ${error.message}`);
+        return null;
+      }
+    })
+  ).filter(Boolean);
 
   for (const repo of repos || []) {
     githubValueCache.delete(`actions:${repo}`);
     for (const key of githubValueCache.keys()) {
-      if (key.startsWith(`workflow-runs:${repo}:`)) githubValueCache.delete(key);
+      if (key.startsWith(`workflow-runs:${repo}:`))
+        githubValueCache.delete(key);
     }
   }
 
@@ -2975,40 +3981,66 @@ function dependabotCleanupSnapshot() {
       ? new Date(dependabotCleanupState.blockedUntil).toISOString()
       : null,
     lastCompletedAt: dependabotCleanupState.lastCompletedAt,
-    closedPullRequests: dependabotCleanupState.lastResult?.closedPullRequests.length || 0,
+    closedPullRequests:
+      dependabotCleanupState.lastResult?.closedPullRequests.length || 0,
     cancelledRuns: dependabotCleanupState.lastResult?.cancelledRuns.length || 0,
-    lastError: dependabotCleanupState.lastError
+    lastError: dependabotCleanupState.lastError,
   };
 }
 
 async function fetchQueuedRunsForRepo(repo, limit) {
   const runs = [];
   for (let page = 1; page <= 50; page += 1) {
-    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for queue discovery.");
-    const json = await githubRestPage(`/repos/${repo}/actions/runs`, page, 100, { status: "queued" });
-    if (currentQuotaIsBlocked()) throw new HttpError(429, "GitHub API quota is too low for queue discovery.");
+    if (currentQuotaIsBlocked())
+      throw new HttpError(
+        429,
+        "GitHub API quota is too low for queue discovery.",
+      );
+    const json = await githubRestPage(
+      `/repos/${repo}/actions/runs`,
+      page,
+      100,
+      { status: "queued" },
+    );
+    if (currentQuotaIsBlocked())
+      throw new HttpError(
+        429,
+        "GitHub API quota is too low for queue discovery.",
+      );
     const items = json?.workflow_runs || [];
     runs.push(...items);
     if (items.length < 100 || runs.length >= limit) break;
   }
-  return runs.map((run) => ({ repo, runId: run.id || null, status: run.status || "", url: run.html_url || "" }));
+  return runs.map((run) => ({
+    repo,
+    runId: run.id || null,
+    status: run.status || "",
+    url: run.html_url || "",
+  }));
 }
 
 async function runDependabotQueueScan({
   threshold = DEPENDABOT_QUEUE_THRESHOLD,
   owners = DEPENDABOT_QUEUE_OWNERS,
   jobs = DEPENDABOT_CLEANUP_JOBS,
-  now = Date.now()
+  now = Date.now(),
 } = {}) {
   if (threshold <= 0 || dependabotCleanupState.running) return null;
   if (now < dependabotCleanupState.blockedUntil) return null;
-  if (dependabotCleanupState.lastAttemptAt && now - dependabotCleanupState.lastAttemptAt < DEPENDABOT_CLEANUP_COOLDOWN_MS) {
+  if (
+    dependabotCleanupState.lastAttemptAt &&
+    now - dependabotCleanupState.lastAttemptAt < DEPENDABOT_CLEANUP_COOLDOWN_MS
+  ) {
     return null;
   }
   const knownQuota = quotaState(snapshotRateLimit(createScanMetrics()));
   const knownResetAt = new Date(knownQuota.resetAt || 0).getTime();
-  if (knownQuota.blocked && (!Number.isFinite(knownResetAt) || knownResetAt > now)) {
-    dependabotCleanupState.lastError = "Dependabot cleanup paused because GitHub API quota is low.";
+  if (
+    knownQuota.blocked &&
+    (!Number.isFinite(knownResetAt) || knownResetAt > now)
+  ) {
+    dependabotCleanupState.lastError =
+      "Dependabot cleanup paused because GitHub API quota is low.";
     dependabotCleanupState.blockedUntil = Number.isFinite(knownResetAt)
       ? Math.max(now + DEPENDABOT_CLEANUP_COOLDOWN_MS, knownResetAt + 30 * 1000)
       : now + DEPENDABOT_CLEANUP_COOLDOWN_MS;
@@ -3025,38 +4057,56 @@ async function runDependabotQueueScan({
       const me = await getAccount();
       const selected = await selectedOwners(me, owners);
       if (owners.length && !selected.length) {
-        throw new Error("No DEPENDABOT_QUEUE_OWNERS matched an accessible GitHub owner.");
+        throw new Error(
+          "No DEPENDABOT_QUEUE_OWNERS matched an accessible GitHub owner.",
+        );
       }
       const repoGroups = await mapLimit(selected, jobs, async (owner) => {
         try {
           return { repos: await fetchOwnerRepos(owner, me), errors: [] };
         } catch (error) {
-          return { repos: [], errors: [`${owner} repositories: ${error.message}`] };
+          return {
+            repos: [],
+            errors: [`${owner} repositories: ${error.message}`],
+          };
         }
       });
       repos = [...new Set(repoGroups.flatMap((group) => group.repos))].sort();
       repositoryErrors = repoGroups.flatMap((group) => group.errors);
       queuedGroups = await mapLimit(repos, jobs, async (repo) => {
         try {
-          return { runs: await fetchQueuedRunsForRepo(repo, threshold), errors: [] };
+          return {
+            runs: await fetchQueuedRunsForRepo(repo, threshold),
+            errors: [],
+          };
         } catch (error) {
-          return { runs: [], errors: [`${repo} queued runs: ${error.message}`] };
+          return {
+            runs: [],
+            errors: [`${repo} queued runs: ${error.message}`],
+          };
         }
       });
     });
     const queuedRuns = queuedGroups.flatMap((group) => group.runs);
-    const discoveryErrors = [...repositoryErrors, ...queuedGroups.flatMap((group) => group.errors)];
+    const discoveryErrors = [
+      ...repositoryErrors,
+      ...queuedGroups.flatMap((group) => group.errors),
+    ];
     dependabotCleanupState.queueDepth = dependabotQueueDepth(queuedRuns);
     dependabotCleanupState.lastScanAt = new Date(now).toISOString();
     dependabotCleanupState.lastError = discoveryErrors.join("; ");
     // Cancelling in-flight runs is the destructive half and stays gated on queue
     // depth. Closing Dependabot PRs whose CI already failed is safe at any depth,
     // so it runs on every pass — a lone failing PR should not wait for a backlog.
-    const cancelRuns = shouldCleanDependabotQueue(dependabotCleanupState.queueDepth, threshold);
+    const cancelRuns = shouldCleanDependabotQueue(
+      dependabotCleanupState.queueDepth,
+      threshold,
+    );
 
     const quota = quotaState(snapshotRateLimit(metrics));
     if (quota.blocked) {
-      dependabotCleanupState.lastError = "Dependabot cleanup paused because GitHub API quota is low.";
+      dependabotCleanupState.lastError =
+        "Dependabot cleanup paused because GitHub API quota is low.";
       const resetAt = new Date(quota.resetAt || 0).getTime();
       dependabotCleanupState.blockedUntil = Number.isFinite(resetAt)
         ? Math.max(now + DEPENDABOT_CLEANUP_COOLDOWN_MS, resetAt + 30 * 1000)
@@ -3067,10 +4117,14 @@ async function runDependabotQueueScan({
     const result = await cleanupDependabotWorkload({ repos, jobs, cancelRuns });
     dependabotCleanupState.lastResult = result;
     dependabotCleanupState.lastCompletedAt = new Date().toISOString();
-    dependabotCleanupState.lastError = [...discoveryErrors, ...result.errors].join("; ");
+    dependabotCleanupState.lastError = [
+      ...discoveryErrors,
+      ...result.errors,
+    ].join("; ");
     return result;
   } catch (error) {
-    dependabotCleanupState.lastError = error.message || "Dependabot cleanup failed";
+    dependabotCleanupState.lastError =
+      error.message || "Dependabot cleanup failed";
     return null;
   } finally {
     dependabotCleanupState.running = false;
@@ -3085,11 +4139,14 @@ function clearDependabotQueueTimer() {
 
 function scheduleDependabotQueueScan(delayMs = 0) {
   if (DEPENDABOT_QUEUE_THRESHOLD <= 0 || dependabotCleanupState.timer) return;
-  dependabotCleanupState.timer = setTimeout(async () => {
-    dependabotCleanupState.timer = null;
-    await runDependabotQueueScan();
-    scheduleDependabotQueueScan(DEPENDABOT_QUEUE_SCAN_MS);
-  }, Math.max(0, delayMs));
+  dependabotCleanupState.timer = setTimeout(
+    async () => {
+      dependabotCleanupState.timer = null;
+      await runDependabotQueueScan();
+      scheduleDependabotQueueScan(DEPENDABOT_QUEUE_SCAN_MS);
+    },
+    Math.max(0, delayMs),
+  );
 }
 
 function resetDependabotCleanupState() {
@@ -3112,10 +4169,22 @@ async function buildBusyRunnerData(requestUrl) {
   const owners = parseOwners(params.get("owners"));
   const me = await getAccount();
   const pullRequests = await fetchPullRequests({ mode, me, jobs, owners });
-  const repos = includeRepoRunners ? await listRepos({ mode, me, pullRequests, jobs, owners }) : [];
-  const busyRunners = await fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners });
+  const repos = includeRepoRunners
+    ? await listRepos({ mode, me, pullRequests, jobs, owners })
+    : [];
+  const busyRunners = await fetchBusyRunners({
+    includeRepoRunners,
+    repos,
+    pullRequests,
+    mode,
+    me,
+    jobs,
+    owners,
+  });
   const sortedBusyRunners = busyRunners.sort((a, b) =>
-    `${a.level}/${a.scope}/${a.name}`.localeCompare(`${b.level}/${b.scope}/${b.name}`)
+    `${a.level}/${a.scope}/${a.name}`.localeCompare(
+      `${b.level}/${b.scope}/${b.name}`,
+    ),
   );
   return {
     account: me,
@@ -3123,12 +4192,12 @@ async function buildBusyRunnerData(requestUrl) {
     options: { mode, jobs, includeRepoRunners, owners },
     summary: {
       busyRunners: sortedBusyRunners.length,
-      repos: repos.length || new Set(pullRequests.map((pr) => pr.repo)).size
+      repos: repos.length || new Set(pullRequests.map((pr) => pr.repo)).size,
     },
     runners: {
-      busy: sortedBusyRunners
+      busy: sortedBusyRunners,
     },
-    rateLimit: snapshotRateLimit(scanMetrics.getStore() || createScanMetrics())
+    rateLimit: snapshotRateLimit(scanMetrics.getStore() || createScanMetrics()),
   };
 }
 
@@ -3138,7 +4207,9 @@ async function buildDashboardData(requestUrl) {
   const jobs = parseJobs(params.get("jobs"));
   const includeCd = parseBool(params.get("includeCd"), true);
   const includeTraces = parseBool(params.get("includeTraces"), false);
-  const includeRunners = parseBool(params.get("includeRunners"), false) || parseBool(params.get("includeRepoRunners"), false);
+  const includeRunners =
+    parseBool(params.get("includeRunners"), false) ||
+    parseBool(params.get("includeRepoRunners"), false);
   const includeRepoRunners = parseBool(params.get("includeRepoRunners"), false);
   const owners = parseOwners(params.get("owners"));
   const me = await getAccount();
@@ -3160,28 +4231,62 @@ async function buildDashboardData(requestUrl) {
   if (repos.length) {
     const actionGroups = await mapLimit(repos, jobs, fetchActionsForRepo);
     failedActions = markAutoDismissedDependabotRuns(
-      uniqueBy(actionGroups.flatMap((group) => group.failed), (run) => run.url || JSON.stringify(run))
+      uniqueBy(
+        actionGroups.flatMap((group) => group.failed),
+        (run) => run.url || JSON.stringify(run),
+      ),
     );
-    runningActions = uniqueBy(actionGroups.flatMap((group) => group.running), (run) => run.url || JSON.stringify(run));
-    pullRequests = applyActionRunEvidenceToPullRequests(pullRequests, { runningActions, failedActions });
+    runningActions = uniqueBy(
+      actionGroups.flatMap((group) => group.running),
+      (run) => run.url || JSON.stringify(run),
+    );
+    pullRequests = applyActionRunEvidenceToPullRequests(pullRequests, {
+      runningActions,
+      failedActions,
+    });
   }
 
   if (includeCd && repos.length) {
     const cdGroups = await mapLimit(repos, jobs, fetchCdForRepo);
-    cdRowsByRepo = new Map(cdGroups.map((group, index) => [
-      repos[index],
-      [...group.failed, ...group.finished, ...group.running]
-    ]));
-    failedCd = uniqueBy(cdGroups.flatMap((group) => group.failed), (run) => run.url || JSON.stringify(run))
-      .filter((run) => !run.resolvedBy);
-    finishedCd = uniqueBy(cdGroups.flatMap((group) => group.finished), (run) => run.url || JSON.stringify(run));
-    runningCd = uniqueBy(cdGroups.flatMap((group) => group.running), (run) => run.url || JSON.stringify(run));
-    const deploymentGroups = await mapLimit(repos, jobs, fetchRunningDeploymentsForRepo);
-    runningDeployments = uniqueBy(deploymentGroups.flat(), (deployment) => deployment.url || JSON.stringify(deployment));
+    cdRowsByRepo = new Map(
+      cdGroups.map((group, index) => [
+        repos[index],
+        [...group.failed, ...group.finished, ...group.running],
+      ]),
+    );
+    failedCd = uniqueBy(
+      cdGroups.flatMap((group) => group.failed),
+      (run) => run.url || JSON.stringify(run),
+    ).filter((run) => !run.resolvedBy);
+    finishedCd = uniqueBy(
+      cdGroups.flatMap((group) => group.finished),
+      (run) => run.url || JSON.stringify(run),
+    );
+    runningCd = uniqueBy(
+      cdGroups.flatMap((group) => group.running),
+      (run) => run.url || JSON.stringify(run),
+    );
+    const deploymentGroups = await mapLimit(
+      repos,
+      jobs,
+      fetchRunningDeploymentsForRepo,
+    );
+    runningDeployments = uniqueBy(
+      deploymentGroups.flat(),
+      (deployment) => deployment.url || JSON.stringify(deployment),
+    );
   }
 
   if (includeRunners) {
-    busyRunners = await fetchBusyRunners({ includeRepoRunners, repos, pullRequests, mode, me, jobs, owners });
+    busyRunners = await fetchBusyRunners({
+      includeRepoRunners,
+      repos,
+      pullRequests,
+      mode,
+      me,
+      jobs,
+      owners,
+    });
   }
 
   if (includeTraces && repos.length) {
@@ -3192,8 +4297,15 @@ async function buildDashboardData(requestUrl) {
         return [];
       }
     });
-    mergedPullRequestsByRepo = new Map(mergedGroups.map((group, index) => [repos[index], group]));
-    traces = buildPipelineTraces({ pullRequests, mergedPullRequestsByRepo, cdRowsByRepo, includeCd });
+    mergedPullRequestsByRepo = new Map(
+      mergedGroups.map((group, index) => [repos[index], group]),
+    );
+    traces = buildPipelineTraces({
+      pullRequests,
+      mergedPullRequestsByRepo,
+      cdRowsByRepo,
+      includeCd,
+    });
   } else if (includeTraces) {
     traces = buildPipelineTraces({ pullRequests, includeCd });
   }
@@ -3217,10 +4329,18 @@ async function buildDashboardData(requestUrl) {
     flaggedJourneys: traces.flagged.length,
     activeJourneys: traces.active.length,
     shippedJourneys: traces.completed.length,
-    tracingUnknown: traces.unknown.length
+    tracingUnknown: traces.unknown.length,
   };
-  const rateLimit = snapshotRateLimit(scanMetrics.getStore() || createScanMetrics());
-  const warnings = buildDashboardWarnings(rateLimit, summary, { mode, jobs, includeCd, includeRunners, includeRepoRunners });
+  const rateLimit = snapshotRateLimit(
+    scanMetrics.getStore() || createScanMetrics(),
+  );
+  const warnings = buildDashboardWarnings(rateLimit, summary, {
+    mode,
+    jobs,
+    includeCd,
+    includeRunners,
+    includeRepoRunners,
+  });
   const cleanupSnapshot = dependabotCleanupSnapshot();
   if (cleanupSnapshot.lastError) {
     warnings.push(`Dependabot cleanup: ${cleanupSnapshot.lastError}`);
@@ -3230,30 +4350,44 @@ async function buildDashboardData(requestUrl) {
     account: me,
     accounts,
     generatedAt: new Date().toISOString(),
-    options: { mode, jobs, includeCd, includeTraces, includeRunners, includeRepoRunners, owners },
+    options: {
+      mode,
+      jobs,
+      includeCd,
+      includeTraces,
+      includeRunners,
+      includeRepoRunners,
+      owners,
+    },
     summary,
     rateLimit,
     warnings,
-    refresh: recommendRefresh(summary, { mode, jobs, includeCd, includeRunners, includeRepoRunners }, rateLimit),
+    refresh: recommendRefresh(
+      summary,
+      { mode, jobs, includeCd, includeRunners, includeRepoRunners },
+      rateLimit,
+    ),
     pullRequests: prGroups,
     actions: {
       failed: failedActions.sort(sortByCreatedDesc),
-      running: runningActions.sort(sortByCreatedDesc)
+      running: runningActions.sort(sortByCreatedDesc),
     },
     cd: {
       running: runningCd.sort(sortByCreatedDesc),
       finished: finishedCd.sort(sortByCreatedDesc),
-      failed: failedCd.sort(sortByCreatedDesc)
+      failed: failedCd.sort(sortByCreatedDesc),
     },
     traces,
     deployments: {
-      running: runningDeployments.sort(sortByCreatedDesc)
+      running: runningDeployments.sort(sortByCreatedDesc),
     },
     runners: {
-      busy: busyRunners.sort((a, b) => `${a.scope}/${a.name}`.localeCompare(`${b.scope}/${b.name}`))
+      busy: busyRunners.sort((a, b) =>
+        `${a.scope}/${a.name}`.localeCompare(`${b.scope}/${b.name}`),
+      ),
     },
     autoMerge: autoMergeSnapshot(),
-    dependabotCleanup: cleanupSnapshot
+    dependabotCleanup: cleanupSnapshot,
   };
 }
 
@@ -3278,9 +4412,9 @@ function autoMergeSnapshot() {
         title: candidate.title,
         url: candidate.url,
         deadline: new Date(candidate.deadline).toISOString(),
-        error: candidate.error || ""
+        error: candidate.error || "",
       }))
-      .sort(sortByRepoAndNumber)
+      .sort(sortByRepoAndNumber),
   };
 }
 
@@ -3291,7 +4425,8 @@ function clearAutoMergeTimer() {
 }
 
 function scheduleAutoMergeScan(delayMs = 0) {
-  if (!autoMergeState.enabled || autoMergeState.timer || autoMergeState.running) return;
+  if (!autoMergeState.enabled || autoMergeState.timer || autoMergeState.running)
+    return;
   autoMergeState.timer = setTimeout(runAutoMergeScan, Math.max(0, delayMs));
 }
 
@@ -3310,7 +4445,7 @@ function syncAutoMergeCandidates(pullRequests) {
       title: pr.title,
       url: pr.url,
       deadline: existing?.deadline || now + AUTO_MERGE_DELAY_MS,
-      error: ""
+      error: "",
     });
   }
 
@@ -3323,7 +4458,8 @@ function syncAutoMergeFromStatus(pullRequests, options) {
   if (!autoMergeState.enabled) return;
   if (autoMergeState.options.mode !== options.mode) return;
   if (autoMergeState.options.jobs !== options.jobs) return;
-  if (!sameAutoMergeOwners(autoMergeState.options.owners, options.owners)) return;
+  if (!sameAutoMergeOwners(autoMergeState.options.owners, options.owners))
+    return;
   syncAutoMergeCandidates(pullRequests);
   if (!autoMergeState.running) {
     clearAutoMergeTimer();
@@ -3333,8 +4469,12 @@ function syncAutoMergeFromStatus(pullRequests, options) {
 
 function nextAutoMergeDelay() {
   const now = Date.now();
-  const deadlines = [...autoMergeState.candidates.values()].map((candidate) => candidate.deadline);
-  const nextDeadline = deadlines.length ? Math.max(1000, Math.min(...deadlines) - now) : AUTO_MERGE_SCAN_MS;
+  const deadlines = [...autoMergeState.candidates.values()].map(
+    (candidate) => candidate.deadline,
+  );
+  const nextDeadline = deadlines.length
+    ? Math.max(1000, Math.min(...deadlines) - now)
+    : AUTO_MERGE_SCAN_MS;
   return Math.min(nextDeadline, AUTO_MERGE_SCAN_MS);
 }
 
@@ -3348,8 +4488,8 @@ async function executeMergePullRequest(repo, number, methodValue) {
   const result = await githubRequest(`/repos/${repo}/pulls/${number}/merge`, {
     method: "PUT",
     body: {
-      merge_method: mergeMethod(methodValue)
-    }
+      merge_method: mergeMethod(methodValue),
+    },
   });
   const merged = Boolean(result?.merged);
   const branchDelete = merged
@@ -3365,8 +4505,8 @@ async function executeMergePullRequest(repo, number, methodValue) {
       number: pr.number,
       numberLabel: pr.numberLabel,
       title: pr.title,
-      url: pr.url
-    }
+      url: pr.url,
+    },
   };
 }
 
@@ -3384,14 +4524,16 @@ async function runAutoMergeScan() {
         mode: autoMergeState.options.mode,
         me,
         jobs: autoMergeState.options.jobs,
-        owners: autoMergeState.options.owners
+        owners: autoMergeState.options.owners,
       });
       syncAutoMergeCandidates(pullRequests);
     });
     autoMergeState.lastScanAt = new Date().toISOString();
 
     const now = Date.now();
-    const due = [...autoMergeState.candidates.values()].filter((candidate) => candidate.deadline <= now);
+    const due = [...autoMergeState.candidates.values()].filter(
+      (candidate) => candidate.deadline <= now,
+    );
     for (const candidate of due) {
       const key = autoMergeKey(candidate.repo, candidate.number);
       autoMergeState.candidates.delete(key);
@@ -3402,7 +4544,7 @@ async function runAutoMergeScan() {
           autoMergeState.candidates.set(key, {
             ...candidate,
             deadline: Date.now() + AUTO_MERGE_SCAN_MS,
-            error: error.message || "Auto merge failed"
+            error: error.message || "Auto merge failed",
           });
         } else {
           autoMergeState.lastError = error.message || "Auto merge failed";
@@ -3430,7 +4572,7 @@ async function autoMergeConfig(req, res) {
   const nextOptions = {
     mode: normalizeMode(body.mode),
     jobs: parseJobs(body.jobs),
-    owners: parseOwners(body.owners)
+    owners: parseOwners(body.owners),
   };
   const optionsChanged =
     autoMergeState.options.mode !== nextOptions.mode ||
@@ -3454,18 +4596,35 @@ async function autoMergeConfig(req, res) {
 
 function groupPullRequests(pullRequests) {
   return {
-    pass: pullRequests.filter((pr) => pr.state === "pass" && pr.checkCount > 0 && !pr.hasConflict).sort(sortByRepoAndNumber),
-    noCi: pullRequests
-      .filter((pr) => pr.state === "pass" && pr.checkCount === 0 && !pr.isDraft && !pr.hasConflict)
+    pass: pullRequests
+      .filter(
+        (pr) => pr.state === "pass" && pr.checkCount > 0 && !pr.hasConflict,
+      )
       .sort(sortByRepoAndNumber),
-    fail: pullRequests.filter((pr) => pr.state === "fail" && !pr.hasConflict).sort(sortByRepoAndNumber),
-    running: pullRequests.filter((pr) => pr.state === "running" && !pr.hasConflict).sort(sortByRepoAndNumber),
-    conflicts: pullRequests.filter((pr) => pr.hasConflict).sort(sortByRepoAndNumber)
+    noCi: pullRequests
+      .filter(
+        (pr) =>
+          pr.state === "pass" &&
+          pr.checkCount === 0 &&
+          !pr.isDraft &&
+          !pr.hasConflict,
+      )
+      .sort(sortByRepoAndNumber),
+    fail: pullRequests
+      .filter((pr) => pr.state === "fail" && !pr.hasConflict)
+      .sort(sortByRepoAndNumber),
+    running: pullRequests
+      .filter((pr) => pr.state === "running" && !pr.hasConflict)
+      .sort(sortByRepoAndNumber),
+    conflicts: pullRequests
+      .filter((pr) => pr.hasConflict)
+      .sort(sortByRepoAndNumber),
   };
 }
 
 function mergeBlockReason(pr) {
-  if (!pr || pr.state !== "pass") return "This pull request is not ready to merge.";
+  if (!pr || pr.state !== "pass")
+    return "This pull request is not ready to merge.";
   if (pr.isDraft) return "Draft pull requests cannot be merged.";
   if (pr.hasConflict) return "This pull request has merge conflicts.";
   if (pr.checkCount === 0 && pr.mergeable !== "MERGEABLE") {
@@ -3490,7 +4649,7 @@ async function sendJson(res, status, body) {
   res.writeHead(status, {
     ...SECURITY_HEADERS,
     "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
   });
   res.end(JSON.stringify(body));
 }
@@ -3539,18 +4698,21 @@ async function deletePullRequestBranch(pr) {
     return {
       deleted: false,
       skipped: true,
-      reason: "Pull request head branch was not available."
+      reason: "Pull request head branch was not available.",
     };
   }
 
   try {
-    await githubRequest(`/repos/${pr.headRepo}/git/refs/heads/${encodeRefPath(pr.headRefName)}`, {
-      method: "DELETE"
-    });
+    await githubRequest(
+      `/repos/${pr.headRepo}/git/refs/heads/${encodeRefPath(pr.headRefName)}`,
+      {
+        method: "DELETE",
+      },
+    );
     return {
       deleted: true,
       repo: pr.headRepo,
-      branch: pr.headRefName
+      branch: pr.headRefName,
     };
   } catch (error) {
     if (error.status === 404) {
@@ -3558,14 +4720,14 @@ async function deletePullRequestBranch(pr) {
         deleted: true,
         alreadyDeleted: true,
         repo: pr.headRepo,
-        branch: pr.headRefName
+        branch: pr.headRefName,
       };
     }
     return {
       deleted: false,
       repo: pr.headRepo,
       branch: pr.headRefName,
-      error: error.message
+      error: error.message,
     };
   }
 }
@@ -3579,7 +4741,11 @@ async function mergePullRequest(req, res) {
   const { repo } = parseRepo(body.repo);
   const number = parsePullNumber(body.number);
   autoMergeState.candidates.delete(autoMergeKey(repo, number));
-  await sendJson(res, 200, await executeMergePullRequest(repo, number, body.mergeMethod));
+  await sendJson(
+    res,
+    200,
+    await executeMergePullRequest(repo, number, body.mergeMethod),
+  );
 }
 
 async function closePullRequest(req, res) {
@@ -3596,26 +4762,30 @@ async function closePullRequest(req, res) {
   const result = await githubRequest(`/repos/${repo}/pulls/${number}`, {
     method: "PATCH",
     body: {
-      state: "closed"
-    }
+      state: "closed",
+    },
   });
 
   await sendJson(res, 200, {
     closed: result?.state === "closed",
-    message: result?.state === "closed" ? "Pull request closed." : "GitHub did not close the pull request.",
+    message:
+      result?.state === "closed"
+        ? "Pull request closed."
+        : "GitHub did not close the pull request.",
     pr: {
       repo: pr.repo,
       number: pr.number,
       numberLabel: pr.numberLabel,
       title: pr.title,
-      url: pr.url
-    }
+      url: pr.url,
+    },
   });
 }
 
 async function sendStatic(req, res) {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-  const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
+  const pathname =
+    requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
   const normalized = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
   const filePath = join(publicDir, normalized);
   if (!filePath.startsWith(publicDir)) throw new HttpError(403, "Forbidden");
@@ -3624,12 +4794,12 @@ async function sendStatic(req, res) {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
-    ".svg": "image/svg+xml"
+    ".svg": "image/svg+xml",
   };
   res.writeHead(200, {
     ...SECURITY_HEADERS,
     "content-type": types[extname(filePath)] || "application/octet-stream",
-    "cache-control": "no-store"
+    "cache-control": "no-store",
   });
   res.end(data);
 }
@@ -3641,7 +4811,10 @@ const HISTORY_SUMMARY_CACHE_TTL_MS = 60 * 1000;
 async function getHistorySummary() {
   if (!historyEnabled()) return null;
   const now = Date.now();
-  if (historySummaryCache && now - historySummaryCacheAt < HISTORY_SUMMARY_CACHE_TTL_MS) {
+  if (
+    historySummaryCache &&
+    now - historySummaryCacheAt < HISTORY_SUMMARY_CACHE_TTL_MS
+  ) {
     return historySummaryCache;
   }
   const entries = await readHistoryFiles();
@@ -3663,12 +4836,17 @@ const server = http.createServer(async (req, res) => {
         data.history = await getHistorySummary();
         await sendJson(res, 200, data);
         if (historyEnabled()) {
-          const quota = snapshotRateLimit(scanMetrics.getStore() || createScanMetrics());
+          const quota = snapshotRateLimit(
+            scanMetrics.getStore() || createScanMetrics(),
+          );
           const tightest = quota.tightest || {};
+          const snapshotOptions = data?.options || {};
           appendHistorySnapshot({
             ts: new Date().toISOString(),
-            mode,
-            owners: Array.isArray(owners) ? owners : [],
+            mode: snapshotOptions.mode,
+            owners: Array.isArray(snapshotOptions.owners)
+              ? snapshotOptions.owners
+              : [],
             repos: data?.summary?.repos ?? 0,
             passingPrs: data?.summary?.passingPrs ?? 0,
             failingPrs: data?.summary?.failingPrs ?? 0,
@@ -3681,17 +4859,17 @@ const server = http.createServer(async (req, res) => {
             failedCd: data?.summary?.failedCd ?? 0,
             runningDeployments: data?.summary?.runningDeployments ?? 0,
             busyRunners: data?.summary?.busyRunners ?? 0,
-            includeCd,
-            includeRunners: includeRunners || includeRepoRunners,
+            includeCd: snapshotOptions.includeCd,
+            includeRunners: snapshotOptions.includeRunners,
             quotaRemaining: tightest.remaining ?? null,
-            quotaLimit: tightest.limit ?? null
+            quotaLimit: tightest.limit ?? null,
           });
         }
       } catch (error) {
         const status = error.status || 500;
         await sendJson(res, status, {
           error: error.message || "Unexpected error",
-          rateLimit: snapshotRateLimit(metrics)
+          rateLimit: snapshotRateLimit(metrics),
         });
       }
       return;
@@ -3710,7 +4888,7 @@ const server = http.createServer(async (req, res) => {
         const status = error.status || 500;
         await sendJson(res, status, {
           error: error.message || "Unexpected error",
-          rateLimit: snapshotRateLimit(metrics)
+          rateLimit: snapshotRateLimit(metrics),
         });
       }
       return;
@@ -3758,8 +4936,12 @@ const server = http.createServer(async (req, res) => {
 if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`GitHub Monitor dashboard: http://127.0.0.1:${port}`);
-    console.log(`Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`);
-    console.log(`Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`);
+    console.log(
+      `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
+    );
+    console.log(
+      `Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`,
+    );
     scheduleDependabotQueueScan(0);
   });
 }
@@ -3817,5 +4999,5 @@ export {
   readHistoryFiles,
   summarizeHistory,
   getHistorySummary,
-  server
+  server,
 };
