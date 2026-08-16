@@ -4823,19 +4823,71 @@ async function getHistorySummary() {
   return historySummaryCache;
 }
 
+// Last successful /api/status payload per query string, plus the in-flight
+// scan promise. Serving these makes page reloads (and duplicate tab refreshes)
+// show the most recent data instantly instead of re-scanning GitHub, and keeps
+// the dashboard from going empty when a fresh scan fails.
+const STATUS_CACHE_TTL_MS = 30 * 1000;
+const statusPayloadCache = new Map();
+let statusScanInFlight = null;
+
+async function runStatusScan(requestUrl, metrics, cacheKey) {
+  return scanMetrics.run(metrics, async () => {
+    const payload = await buildDashboardData(requestUrl);
+    payload.history = await getHistorySummary();
+    statusPayloadCache.set(cacheKey, { payload, at: Date.now() });
+    return payload;
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
     if (requestUrl.pathname === "/api/status") {
       const metrics = createScanMetrics();
+      const cacheKey = requestUrl.search;
+      const cached = statusPayloadCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < STATUS_CACHE_TTL_MS) {
+        await sendJson(res, 200, {
+          ...cached.payload,
+          cached: true,
+          cachedAgeMs: Date.now() - cached.at,
+        });
+        return;
+      }
       let data;
       try {
-        await scanMetrics.run(metrics, async () => {
-          data = await buildDashboardData(requestUrl);
-        });
-        data.history = await getHistorySummary();
+        const joinedInFlight =
+          Boolean(statusScanInFlight) && statusScanInFlight.key === cacheKey;
+        if (joinedInFlight) {
+          data = await statusScanInFlight.promise;
+        } else {
+          statusScanInFlight = {
+            key: cacheKey,
+            promise: runStatusScan(requestUrl, metrics, cacheKey).finally(
+              () => {
+                statusScanInFlight = null;
+              },
+            ),
+          };
+          try {
+            data = await statusScanInFlight.promise;
+          } catch (error) {
+            const stale = statusPayloadCache.get(cacheKey);
+            if (stale) {
+              await sendJson(res, 200, {
+                ...stale.payload,
+                stale: true,
+                refreshError:
+                  error.message || "Scan failed; showing last known data",
+              });
+              return;
+            }
+            throw error;
+          }
+        }
         await sendJson(res, 200, data);
-        if (historyEnabled()) {
+        if (historyEnabled() && !joinedInFlight) {
           const quota = snapshotRateLimit(
             scanMetrics.getStore() || createScanMetrics(),
           );

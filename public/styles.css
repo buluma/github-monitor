@@ -503,6 +503,34 @@ kbd {
   letter-spacing: 0;
 }
 
+.stale-badge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--amber);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.stale-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
 #rateLimit {
   cursor: help;
   text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent);

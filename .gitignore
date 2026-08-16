@@ -17,3 +17,5 @@ build/
 
 # Local visual-QA screenshot artifacts
 .qa/
+
+.playwright-mcp/

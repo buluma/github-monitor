@@ -44,10 +44,78 @@ const DISMISSED_KEY = "pr-deck:dismissed:v1";
 // can't grow forever and a brand-new run for the same lane reappears on its own.
 const DISMISSED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+// The last successful /api/status payload lives in IndexedDB (larger than
+// localStorage's ~5MB budget) so a page reload paints instantly with the most
+// recent data while the fresh scan runs in the background.
+const DATA_DB_NAME = "github-monitor";
+const DATA_DB_VERSION = 1;
+const DATA_STORE = "status";
+const DATA_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function openDataDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("indexedDB unavailable"));
+      return;
+    }
+    const request = indexedDB.open(DATA_DB_NAME, DATA_DB_VERSION);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(DATA_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function idbGet(key) {
+  return openDataDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(DATA_STORE, "readonly");
+        const request = tx.objectStore(DATA_STORE).get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      }),
+  );
+}
+
+function idbPut(key, value) {
+  return openDataDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(DATA_STORE, "readwrite");
+        tx.objectStore(DATA_STORE).put(value, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      }),
+  );
+}
+
+// Best-effort: a full cache must never break the dashboard.
+async function cacheStatusData(payload) {
+  try {
+    await idbPut("status", { savedAt: Date.now(), payload });
+  } catch {
+    // ignore
+  }
+}
+
+async function loadStatusDataCache() {
+  try {
+    const record = await idbGet("status");
+    if (!record || !record.payload) return null;
+    if (Date.now() - record.savedAt > DATA_CACHE_MAX_AGE_MS) return null;
+    return record.payload;
+  } catch {
+    return null;
+  }
+}
+
 const persisted = loadPersisted();
 
 const state = {
   data: null,
+  dataStale: false,
   mode: persisted.mode || "all",
   view: persisted.view || "fail",
   traceFilter: persisted.traceFilter || "flagged",
@@ -211,6 +279,7 @@ const els = {
   nextRefresh: document.querySelector("#nextRefresh"),
   rateLimit: document.querySelector("#rateLimit"),
   loading: document.querySelector("#loading"),
+  staleBadge: document.querySelector("#staleBadge"),
   errorPanel: document.querySelector("#errorPanel"),
   content: document.querySelector("#content"),
   viewKicker: document.querySelector("#viewKicker"),
@@ -1343,6 +1412,12 @@ function setLoading(isLoading) {
   updateRefreshButtonState();
 }
 
+function updateStaleIndicator() {
+  const hidden = !state.dataStale;
+  els.staleBadge.classList.toggle("hidden", hidden);
+  els.staleBadge.setAttribute("aria-hidden", hidden ? "true" : "false");
+}
+
 function setError(message, tone = "error") {
   els.errorPanel.textContent = message || "";
   els.errorPanel.classList.toggle("hidden", !message);
@@ -1733,7 +1808,15 @@ async function refresh({ source = "manual" } = {}) {
     state.activitySnapshot = buildActivitySnapshot(mergedData);
     state.data = mergedData;
     state.refreshRetryCount = 0;
-    render();
+    if (data.stale) {
+      state.dataStale = true;
+      render();
+      setError(data.refreshError || "Showing last known data", "warning");
+    } else {
+      state.dataStale = false;
+      render();
+      cacheStatusData(mergedData);
+    }
     scheduleAutoRefresh(mergedData);
   } catch (error) {
     setError(error.message);
@@ -1964,6 +2047,7 @@ function render() {
   lastGeneratedAt = data.generatedAt;
   els.generatedAt.textContent = formatRelative(data.generatedAt);
   ensureGeneratedTicker();
+  updateStaleIndicator();
 
   if (Array.isArray(data.accounts)) {
     syncAccountOptions(data.accounts);
@@ -3676,8 +3760,22 @@ els.filter.value = state.filter;
 syncNotificationControl();
 renderInbox();
 ensureCountdownTimer();
-configureServerAutoMerge()
-  .catch((error) => {
+
+// Paint the last-known dashboard from the cache first, then let the fresh scan
+// replace it. Reloading never shows a blank screen again.
+async function boot() {
+  const cachedData = await loadStatusDataCache();
+  if (cachedData) {
+    state.data = cachedData;
+    state.dataStale = true;
+    render();
+  }
+  try {
+    await configureServerAutoMerge();
+  } catch (error) {
     setError(error.message);
-  })
-  .finally(() => refresh());
+  }
+  refresh();
+}
+
+boot();
