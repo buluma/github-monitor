@@ -416,10 +416,65 @@ function loadNotified() {
   }
 }
 
+async function postClientStateUpdate(updates) {
+  try {
+    await fetch("/api/client/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+  } catch {}
+}
+
+async function syncClientStateWithServer() {
+  try {
+    const res = await fetch("/api/client/state");
+    if (!res.ok) return;
+    const serverState = await res.json();
+    if (!serverState || typeof serverState !== "object") return;
+
+    if (serverState.settings && typeof serverState.settings === "object") {
+      state.settings = { ...state.settings, ...serverState.settings };
+      state.mode = serverState.settings.mode || state.mode;
+      state.view = serverState.settings.view || state.view;
+      state.traceFilter = serverState.settings.traceFilter || state.traceFilter;
+      state.filter = serverState.settings.filter ?? state.filter;
+      state.theme = serverState.settings.theme || state.theme;
+      state.autoMerge = Boolean(serverState.settings.autoMerge);
+      state.notifications = Boolean(serverState.settings.notifications);
+      state.owners = Array.isArray(serverState.settings.owners)
+        ? serverState.settings.owners
+        : state.owners;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serverState.settings));
+    }
+    if (Array.isArray(serverState.inbox)) {
+      state.inbox = serverState.inbox;
+      localStorage.setItem(INBOX_KEY, JSON.stringify(state.inbox));
+    }
+    if (Array.isArray(serverState.traceCache)) {
+      state.traceCache = serverState.traceCache;
+      localStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(state.traceCache));
+    }
+    if (serverState.phaseAges && typeof serverState.phaseAges === "object") {
+      state.phaseAges = serverState.phaseAges;
+      localStorage.setItem(PHASE_AGE_KEY, JSON.stringify(state.phaseAges));
+    }
+    if (serverState.notified && typeof serverState.notified === "object") {
+      state.notified = serverState.notified;
+      localStorage.setItem(NOTIFIED_KEY, JSON.stringify(state.notified));
+    }
+    if (serverState.dismissed && typeof serverState.dismissed === "object") {
+      state.dismissed = serverState.dismissed;
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(state.dismissed));
+    }
+  } catch {}
+}
+
 function saveNotified() {
   try {
     state.notified = pruneNotified(state.notified);
     localStorage.setItem(NOTIFIED_KEY, JSON.stringify(state.notified));
+    postClientStateUpdate({ notified: state.notified });
   } catch {}
 }
 
@@ -460,12 +515,14 @@ function savePhaseAges() {
   try {
     state.phaseAges = prunePhaseAges(state.phaseAges);
     localStorage.setItem(PHASE_AGE_KEY, JSON.stringify(state.phaseAges));
+    postClientStateUpdate({ phaseAges: state.phaseAges });
   } catch {}
 }
 
 function saveDismissed() {
   try {
     localStorage.setItem(DISMISSED_KEY, JSON.stringify(state.dismissed));
+    postClientStateUpdate({ dismissed: state.dismissed });
   } catch {}
 }
 
@@ -567,10 +624,12 @@ function pruneTraceCache(items) {
 function saveInbox() {
   try {
     state.inbox = pruneInbox(state.inbox);
+    const sliced = state.inbox.slice(0, INBOX_MAX);
     localStorage.setItem(
       INBOX_KEY,
-      JSON.stringify(state.inbox.slice(0, INBOX_MAX)),
+      JSON.stringify(sliced),
     );
+    postClientStateUpdate({ inbox: sliced });
   } catch {}
 }
 
@@ -578,6 +637,7 @@ function saveTraceCache() {
   try {
     state.traceCache = pruneTraceCache(state.traceCache);
     localStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(state.traceCache));
+    postClientStateUpdate({ traceCache: state.traceCache });
   } catch {}
 }
 
@@ -602,19 +662,21 @@ function prunePhaseAges(ages) {
 
 function persist() {
   try {
+    const settings = {
+      mode: state.mode,
+      view: state.view,
+      traceFilter: state.traceFilter,
+      filter: state.filter,
+      theme: state.theme,
+      autoMerge: state.autoMerge,
+      notifications: state.notifications,
+      owners: state.owners,
+    };
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({
-        mode: state.mode,
-        view: state.view,
-        traceFilter: state.traceFilter,
-        filter: state.filter,
-        theme: state.theme,
-        autoMerge: state.autoMerge,
-        notifications: state.notifications,
-        owners: state.owners,
-      }),
+      JSON.stringify(settings),
     );
+    postClientStateUpdate({ settings });
   } catch {}
 }
 
@@ -3837,6 +3899,7 @@ ensureCountdownTimer();
 // Paint the last-known dashboard from the cache first, then let the fresh scan
 // replace it. Reloading never shows a blank screen again.
 async function boot() {
+  await syncClientStateWithServer();
   const cachedData = await loadStatusDataCache();
   if (cachedData) {
     state.data = cachedData;

@@ -6,6 +6,25 @@ import { readFile, stat, mkdir, readdir, appendFile, cp, writeFile } from "node:
 import { extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import {
+  initDb,
+  getDbPath,
+  insertHistorySnapshotDb,
+  getHistorySnapshotsDb,
+  migrateJsonlHistory,
+  getClientStateDb,
+  updateClientStateDb,
+  clearClientStateDb,
+  loadEtagCacheDb,
+  saveEtagCacheDb,
+  loadGithubValueCacheDb,
+  saveGithubValueCacheDb,
+  loadInstallationTokensDb,
+  saveInstallationTokenDb,
+  loadAutoMergeCandidatesDb,
+  saveAutoMergeCandidateDb,
+  deleteAutoMergeCandidateDb,
+} from "./db.js";
 
 const isMain =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
@@ -557,6 +576,7 @@ async function getInstallationToken(ownerHint) {
   }
   const minted = await mintInstallationToken(installation.installationId);
   installationTokensByOwner.set(cacheKey, minted);
+  saveInstallationTokenDb(cacheKey, minted.token, minted.expiresAt);
   return { token: minted.token, installationKey: cacheKey };
 }
 
@@ -575,6 +595,79 @@ function githubUrl(path, query = {}) {
 const etagCache = new Map();
 const ETAG_CACHE_DISABLED = process.env.ETAG_CACHE_DISABLED === "1";
 const ETAG_CACHEABLE_METHODS = new Set(["GET", "HEAD"]);
+
+async function hydrateCachesFromDb() {
+  await initDb();
+  try {
+    const etagRows = loadEtagCacheDb();
+    for (const r of etagRows) {
+      let body = r.body;
+      if (
+        typeof body === "string" &&
+        (body.startsWith("{") || body.startsWith("["))
+      ) {
+        try {
+          body = JSON.parse(body);
+        } catch {}
+      }
+      etagCache.set(r.key, {
+        etag: r.etag,
+        lastModified: r.last_modified,
+        body,
+        method: r.method,
+      });
+    }
+
+    const valRows = loadGithubValueCacheDb();
+    const now = Date.now();
+    for (const r of valRows) {
+      if (r.expires_at > now) {
+        let val = r.value;
+        if (
+          typeof val === "string" &&
+          (val.startsWith("{") || val.startsWith("["))
+        ) {
+          try {
+            val = JSON.parse(val);
+          } catch {}
+        }
+        githubValueCache.set(r.key, { value: val, expiresAt: r.expires_at });
+      }
+    }
+
+    const tokenRows = loadInstallationTokensDb();
+    for (const r of tokenRows) {
+      if (r.expires_at > now) {
+        installationTokensByOwner.set(r.owner, {
+          token: r.token,
+          expiresAt: r.expires_at,
+        });
+      }
+    }
+
+    const autoMergeRows = loadAutoMergeCandidatesDb();
+    for (const r of autoMergeRows) {
+      autoMergeState.candidates.set(`${r.repo}#${r.number}`, {
+        repo: r.repo,
+        number: r.number,
+        numberLabel: r.number_label,
+        title: r.title,
+        url: r.url,
+        deadline: r.deadline,
+        error: r.error,
+      });
+    }
+
+    if (historyEnabled()) {
+      migrateJsonlHistory(historyBasePath()).catch(() => {});
+    }
+  } catch (err) {
+    // Best-effort cache hydration
+  }
+}
+
+await hydrateCachesFromDb();
+
 function historyEnabled() {
   return process.env.HISTORY_ENABLED === "1";
 }
@@ -607,6 +700,7 @@ async function ensureHistoryDir() {
 }
 
 async function appendHistorySnapshot(snapshot) {
+  insertHistorySnapshotDb(snapshot);
   if (!historyEnabled()) return;
   try {
     const dir = await ensureHistoryDir();
@@ -623,6 +717,10 @@ async function appendHistorySnapshot(snapshot) {
 }
 
 async function readHistoryFiles(since) {
+  const dbEntries = getHistorySnapshotsDb(since);
+  if (dbEntries && dbEntries.length > 0) {
+    return dbEntries;
+  }
   if (!historyEnabled()) return [];
   const base = historyBasePath();
   const cutoff = since
@@ -753,6 +851,14 @@ function storeConditionalResponse(store, url, method, response, body) {
     return false;
   }
   store.set(url, { etag, body });
+  saveEtagCacheDb(
+    url,
+    method,
+    etag,
+    response.headers.get("last-modified") || "",
+    body,
+    0,
+  );
   return true;
 }
 
@@ -911,10 +1017,12 @@ async function cachedGithubValue(key, ttlMs, loader) {
   const promise = Promise.resolve()
     .then(loader)
     .then((value) => {
+      const expiresAt = Date.now() + ttlMs;
       githubValueCache.set(key, {
         value,
-        expiresAt: Date.now() + ttlMs,
+        expiresAt,
       });
+      saveGithubValueCacheDb(key, value, expiresAt);
       return value;
     })
     .catch((error) => {
@@ -1023,7 +1131,10 @@ function recommendRefresh(summary, options, rateLimit) {
     summary.runningDeployments +
     summary.busyRunners;
   const problemCount = summary.failingPrs + summary.failedCd;
-  let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
+
+  // With a fixed baseline or minimum floor of 15 minutes (900s):
+  let intervalSeconds = 900;
+  // let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
 
   if (options.mode === "all") intervalSeconds += 60;
   if (options.includeCd) intervalSeconds += 60;
@@ -4476,8 +4587,7 @@ function syncAutoMergeCandidates(pullRequests) {
     if (!isAutoMergeCandidate(pr)) continue;
     const key = autoMergeKey(pr.repo, pr.number);
     eligibleKeys.add(key);
-    const existing = autoMergeState.candidates.get(key);
-    autoMergeState.candidates.set(key, {
+    const candidateObj = {
       repo: pr.repo,
       number: pr.number,
       numberLabel: pr.numberLabel,
@@ -4485,11 +4595,17 @@ function syncAutoMergeCandidates(pullRequests) {
       url: pr.url,
       deadline: existing?.deadline || now + AUTO_MERGE_DELAY_MS,
       error: "",
-    });
+    };
+    autoMergeState.candidates.set(key, candidateObj);
+    saveAutoMergeCandidateDb(candidateObj);
   }
 
   for (const key of [...autoMergeState.candidates.keys()]) {
-    if (!eligibleKeys.has(key)) autoMergeState.candidates.delete(key);
+    if (!eligibleKeys.has(key)) {
+      const candidate = autoMergeState.candidates.get(key);
+      autoMergeState.candidates.delete(key);
+      if (candidate) deleteAutoMergeCandidateDb(candidate.repo, candidate.number);
+    }
   }
 }
 
@@ -5013,6 +5129,26 @@ const server = http.createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/pull-request/close") {
       await closePullRequest(req, res);
       return;
+    }
+    if (requestUrl.pathname === "/api/client/state") {
+      if (req.method === "GET") {
+        const state = getClientStateDb() || {};
+        await sendJson(res, 200, state);
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        updateClientStateDb(body);
+        const updated = getClientStateDb() || {};
+        await sendJson(res, 200, { ok: true, state: updated });
+        return;
+      }
+      if (req.method === "DELETE") {
+        clearClientStateDb();
+        await sendJson(res, 200, { ok: true });
+        return;
+      }
+      throw new HttpError(405, "Method not allowed");
     }
     if (requestUrl.pathname === "/api/health") {
       await sendJson(res, 200, { ok: true });
