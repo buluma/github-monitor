@@ -2,10 +2,29 @@ import http from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { createSign } from "node:crypto";
-import { readFile, stat, mkdir, readdir, appendFile } from "node:fs/promises";
+import { readFile, stat, mkdir, readdir, appendFile, cp, writeFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import {
+  initDb,
+  getDbPath,
+  insertHistorySnapshotDb,
+  getHistorySnapshotsDb,
+  migrateJsonlHistory,
+  getClientStateDb,
+  updateClientStateDb,
+  clearClientStateDb,
+  loadEtagCacheDb,
+  saveEtagCacheDb,
+  loadGithubValueCacheDb,
+  saveGithubValueCacheDb,
+  loadInstallationTokensDb,
+  saveInstallationTokenDb,
+  loadAutoMergeCandidatesDb,
+  saveAutoMergeCandidateDb,
+  deleteAutoMergeCandidateDb,
+} from "./db.js";
 
 const isMain =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
@@ -557,6 +576,7 @@ async function getInstallationToken(ownerHint) {
   }
   const minted = await mintInstallationToken(installation.installationId);
   installationTokensByOwner.set(cacheKey, minted);
+  saveInstallationTokenDb(cacheKey, minted.token, minted.expiresAt);
   return { token: minted.token, installationKey: cacheKey };
 }
 
@@ -575,6 +595,79 @@ function githubUrl(path, query = {}) {
 const etagCache = new Map();
 const ETAG_CACHE_DISABLED = process.env.ETAG_CACHE_DISABLED === "1";
 const ETAG_CACHEABLE_METHODS = new Set(["GET", "HEAD"]);
+
+async function hydrateCachesFromDb() {
+  await initDb();
+  try {
+    const etagRows = loadEtagCacheDb();
+    for (const r of etagRows) {
+      let body = r.body;
+      if (
+        typeof body === "string" &&
+        (body.startsWith("{") || body.startsWith("["))
+      ) {
+        try {
+          body = JSON.parse(body);
+        } catch {}
+      }
+      etagCache.set(r.key, {
+        etag: r.etag,
+        lastModified: r.last_modified,
+        body,
+        method: r.method,
+      });
+    }
+
+    const valRows = loadGithubValueCacheDb();
+    const now = Date.now();
+    for (const r of valRows) {
+      if (r.expires_at > now) {
+        let val = r.value;
+        if (
+          typeof val === "string" &&
+          (val.startsWith("{") || val.startsWith("["))
+        ) {
+          try {
+            val = JSON.parse(val);
+          } catch {}
+        }
+        githubValueCache.set(r.key, { value: val, expiresAt: r.expires_at });
+      }
+    }
+
+    const tokenRows = loadInstallationTokensDb();
+    for (const r of tokenRows) {
+      if (r.expires_at > now) {
+        installationTokensByOwner.set(r.owner, {
+          token: r.token,
+          expiresAt: r.expires_at,
+        });
+      }
+    }
+
+    const autoMergeRows = loadAutoMergeCandidatesDb();
+    for (const r of autoMergeRows) {
+      autoMergeState.candidates.set(`${r.repo}#${r.number}`, {
+        repo: r.repo,
+        number: r.number,
+        numberLabel: r.number_label,
+        title: r.title,
+        url: r.url,
+        deadline: r.deadline,
+        error: r.error,
+      });
+    }
+
+    if (historyEnabled()) {
+      migrateJsonlHistory(historyBasePath()).catch(() => {});
+    }
+  } catch (err) {
+    // Best-effort cache hydration
+  }
+}
+
+await hydrateCachesFromDb();
+
 function historyEnabled() {
   return process.env.HISTORY_ENABLED === "1";
 }
@@ -608,6 +701,7 @@ async function ensureHistoryDir() {
 
 async function appendHistorySnapshot(snapshot) {
   if (!historyEnabled()) return;
+  insertHistorySnapshotDb(snapshot);
   try {
     const dir = await ensureHistoryDir();
     if (!dir) return;
@@ -624,6 +718,10 @@ async function appendHistorySnapshot(snapshot) {
 
 async function readHistoryFiles(since) {
   if (!historyEnabled()) return [];
+  const dbEntries = getHistorySnapshotsDb(since);
+  if (dbEntries && dbEntries.length > 0) {
+    return dbEntries;
+  }
   const base = historyBasePath();
   const cutoff = since
     ? new Date(since).getTime()
@@ -753,6 +851,14 @@ function storeConditionalResponse(store, url, method, response, body) {
     return false;
   }
   store.set(url, { etag, body });
+  saveEtagCacheDb(
+    url,
+    method,
+    etag,
+    response.headers.get("last-modified") || "",
+    body,
+    0,
+  );
   return true;
 }
 
@@ -911,10 +1017,12 @@ async function cachedGithubValue(key, ttlMs, loader) {
   const promise = Promise.resolve()
     .then(loader)
     .then((value) => {
+      const expiresAt = Date.now() + ttlMs;
       githubValueCache.set(key, {
         value,
-        expiresAt: Date.now() + ttlMs,
+        expiresAt,
       });
+      saveGithubValueCacheDb(key, value, expiresAt);
       return value;
     })
     .catch((error) => {
@@ -1023,7 +1131,10 @@ function recommendRefresh(summary, options, rateLimit) {
     summary.runningDeployments +
     summary.busyRunners;
   const problemCount = summary.failingPrs + summary.failedCd;
-  let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
+
+  // With a fixed baseline or minimum floor of 15 minutes (900s):
+  let intervalSeconds = 900;
+  // let intervalSeconds = activeCount > 0 ? 60 : problemCount > 0 ? 180 : 300;
 
   if (options.mode === "all") intervalSeconds += 60;
   if (options.includeCd) intervalSeconds += 60;
@@ -1185,8 +1296,8 @@ function parseBool(value, fallback = false) {
 }
 
 function parseJobs(value) {
-  const jobs = Number(value || process.env.OPEN_PRS_JOBS || 4);
-  if (!Number.isInteger(jobs) || jobs < 1) return 4;
+  const jobs = Number(value || process.env.OPEN_PRS_JOBS || 8);
+  if (!Number.isInteger(jobs) || jobs < 1) return 8;
   return Math.min(jobs, 16);
 }
 
@@ -2496,6 +2607,29 @@ async function fetchWorkflowRuns(repo, workflowId, params) {
   });
 }
 
+// One paginated /actions/runs fetch per repo, shared by the actions and CD lanes.
+// Cold scans used to pay 1 + (number of CD workflows) requests per repo for the
+// run list; this collapses that to a single request (up to `maxPages` pages of
+// 100). Runs come back newest-first, and grouping by workflow_id below preserves
+// that order for each workflow. The per-workflow fetchWorkflowRuns above remains
+// for any caller that needs an exact per-workflow window.
+async function fetchRecentRuns(repo, maxPages = 3) {
+  const cacheKey = `recent-runs:${repo}:${maxPages}`;
+  return cachedGithubValue(cacheKey, WORKFLOW_RUN_CACHE_TTL_MS, async () => {
+    const runs = [];
+    for (let page = 1; page <= maxPages; page += 1) {
+      const json = await githubRequest(`/repos/${repo}/actions/runs`, {
+        query: { per_page: 100, page },
+      });
+      const items = json?.workflow_runs || [];
+      if (!items.length) break;
+      runs.push(...items);
+      if (items.length < 100) break;
+    }
+    return runs;
+  });
+}
+
 async function fetchRecentDeploymentTargets(repo) {
   return cachedGithubValue(
     `deployment-targets:${repo}`,
@@ -3406,11 +3540,27 @@ async function fetchCdForRepo(repo) {
       running: markIgnoredRuns(running),
     };
   }
+  let recentRuns = [];
+  try {
+    recentRuns = await fetchRecentRuns(repo);
+  } catch {
+    return {
+      failed: markIgnoredRuns(failed),
+      finished,
+      running: markIgnoredRuns(running),
+    };
+  }
+  const runsByWorkflow = new Map();
+  for (const run of recentRuns) {
+    if (!run || run.workflow_id == null) continue;
+    if (!runsByWorkflow.has(run.workflow_id)) {
+      runsByWorkflow.set(run.workflow_id, []);
+    }
+    runsByWorkflow.get(run.workflow_id).push(run);
+  }
   for (const workflow of workflows) {
     try {
-      const recentWorkflowRuns = await fetchWorkflowRuns(repo, workflow.id, {
-        per_page: 20,
-      });
+      const recentWorkflowRuns = runsByWorkflow.get(workflow.id) || [];
       const completedRuns = recentWorkflowRuns.filter(
         (run) => run.status === "completed",
       );
@@ -3551,10 +3701,7 @@ async function fetchActionsForRepo(repo) {
     RUNNING_ACTION_CACHE_TTL_MS,
     async () => {
       try {
-        const json = await githubRequest(`/repos/${repo}/actions/runs`, {
-          query: { per_page: 20 },
-        });
-        const runs = json?.workflow_runs || [];
+        const runs = await fetchRecentRuns(repo);
         const running = runs
           .filter((run) => RUNNING_RUN_STATUSES.has(run.status))
           .filter((run) => !isCdWorkflowRun(run))
@@ -4440,8 +4587,7 @@ function syncAutoMergeCandidates(pullRequests) {
     if (!isAutoMergeCandidate(pr)) continue;
     const key = autoMergeKey(pr.repo, pr.number);
     eligibleKeys.add(key);
-    const existing = autoMergeState.candidates.get(key);
-    autoMergeState.candidates.set(key, {
+    const candidateObj = {
       repo: pr.repo,
       number: pr.number,
       numberLabel: pr.numberLabel,
@@ -4449,11 +4595,17 @@ function syncAutoMergeCandidates(pullRequests) {
       url: pr.url,
       deadline: existing?.deadline || now + AUTO_MERGE_DELAY_MS,
       error: "",
-    });
+    };
+    autoMergeState.candidates.set(key, candidateObj);
+    saveAutoMergeCandidateDb(candidateObj);
   }
 
   for (const key of [...autoMergeState.candidates.keys()]) {
-    if (!eligibleKeys.has(key)) autoMergeState.candidates.delete(key);
+    if (!eligibleKeys.has(key)) {
+      const candidate = autoMergeState.candidates.get(key);
+      autoMergeState.candidates.delete(key);
+      if (candidate) deleteAutoMergeCandidateDb(candidate.repo, candidate.number);
+    }
   }
 }
 
@@ -4649,6 +4801,9 @@ function sortByCreatedDesc(a, b) {
 }
 
 async function sendJson(res, status, body) {
+  // Guard against double-send (e.g. an error raised after a response was already
+  // written), which used to crash the process with ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return;
   res.writeHead(status, {
     ...SECURITY_HEADERS,
     "content-type": "application/json; charset=utf-8",
@@ -4833,12 +4988,27 @@ async function getHistorySummary() {
 const STATUS_CACHE_TTL_MS = 30 * 1000;
 const statusPayloadCache = new Map();
 let statusScanInFlight = null;
+let lastScanLog = null;
 
 async function runStatusScan(requestUrl, metrics, cacheKey) {
+  const startedAt = Date.now();
   return scanMetrics.run(metrics, async () => {
     const payload = await buildDashboardData(requestUrl);
     payload.history = await getHistorySummary();
     statusPayloadCache.set(cacheKey, { payload, at: Date.now() });
+    const quota = snapshotRateLimit(metrics);
+    const tightest = quota.tightest || {};
+    lastScanLog = {
+      ts: new Date().toISOString(),
+      mode: payload.options?.mode || "all",
+      repos: payload.summary?.repos ?? 0,
+      durationMs: Date.now() - startedAt,
+      requests: metrics.requestCount,
+      conditionalHits: metrics.conditionalHits,
+      quotaRemaining: tightest.remaining ?? null,
+      quotaLimit: tightest.limit ?? null,
+    };
+    console.log(`[scan] ${JSON.stringify(lastScanLog)}`);
     return payload;
   });
 }
@@ -4960,8 +5130,46 @@ const server = http.createServer(async (req, res) => {
       await closePullRequest(req, res);
       return;
     }
+    if (requestUrl.pathname === "/api/client/state") {
+      if (req.method === "GET") {
+        const state = getClientStateDb() || {};
+        await sendJson(res, 200, state);
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        updateClientStateDb(body);
+        const updated = getClientStateDb() || {};
+        await sendJson(res, 200, { ok: true, state: updated });
+        return;
+      }
+      if (req.method === "DELETE") {
+        clearClientStateDb();
+        await sendJson(res, 200, { ok: true });
+        return;
+      }
+      throw new HttpError(405, "Method not allowed");
+    }
     if (requestUrl.pathname === "/api/health") {
       await sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (requestUrl.pathname === "/api/diagnostics") {
+      if (req.method !== "GET") {
+        throw new HttpError(405, "Method not allowed");
+      }
+      const account = await getAccount().catch(() => null);
+      await sendJson(res, 200, {
+        pid: process.pid,
+        uptimeMs: Math.round(process.uptime() * 1000),
+        memory: process.memoryUsage(),
+        authMode: APP_AUTH_ENABLED ? "app" : "pat",
+        account,
+        etagCacheEntries: etagCache.size,
+        githubValueCacheEntries: githubValueCache.size,
+        statusPayloadCacheEntries: statusPayloadCache.size,
+        lastScan: lastScanLog,
+      });
       return;
     }
     if (requestUrl.pathname === "/api/history/scans") {
@@ -4988,20 +5196,125 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (isMain) {
-  server.listen(port, host, () => {
-    const displayHost =
-      host === "0.0.0.0" || host === "::" ? "localhost" : host;
-    console.log(`GitHub Monitor dashboard: http://${displayHost}:${port}`);
-    console.log(
-      `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
-    );
-    console.log(
-      `Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`,
-    );
-    scheduleDependabotQueueScan(0);
-  });
+// ——— Static snapshot export (GitHub Pages / CI) ———
+// `node server.js --snapshot [--out dist] [--query "mode=all&..."]` runs one scan
+// and writes a fully static, self-contained copy of the dashboard:
+//   dist/index.html     rewritten to relative asset URLs + static-mode meta tag
+//   dist/status.json    the exact payload /api/status would have returned
+//   dist/history.json   the exact payload /api/history/scans would have returned
+// The frontend detects the meta tag, skips polling/actions, and renders from the
+// local JSON files — so the bundle can be published to any static host.
+const SNAPSHOT_DEFAULT_QUERY =
+  "mode=all&includeCd=1&includeTraces=1&includeRunners=1&includeRepoRunners=0&jobs=4";
+
+export function rewriteStaticIndex(html) {
+  let withMeta = html;
+  if (!html.includes('name="gh-monitor-static"')) {
+    const headMatch = html.match(/<head[\s>]/i);
+    if (headMatch) {
+      const headStart = headMatch.index;
+      const closingGt = html.indexOf(">", headStart);
+      if (closingGt !== -1) {
+        withMeta =
+          html.slice(0, closingGt + 1) +
+          '<meta name="gh-monitor-static" content="1" />' +
+          html.slice(closingGt + 1);
+      }
+    }
+  }
+  // GitHub Pages serves project sites under a base path (/repo/), so absolute
+  // asset URLs ("/app.js") would break. Relative URLs resolve against the page.
+  return withMeta.replace(/(src|href)="\/([^"]+)"/g, '$1="$2"');
 }
+
+async function runSnapshot() {
+  const args = process.argv.slice(2);
+  const argValue = (name, fallback = "") => {
+    const index = args.indexOf(name);
+    return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
+  };
+  const outDir = argValue("--out", "dist");
+  const query =
+    process.env.SNAPSHOT_QUERY || argValue("--query", SNAPSHOT_DEFAULT_QUERY);
+  const requestUrl = new URL(`http://snapshot.local/api/status?${query}`);
+  const metrics = createScanMetrics();
+  const startedAt = Date.now();
+
+  let payload;
+  try {
+    payload = await scanMetrics.run(metrics, async () => {
+      const data = await buildDashboardData(requestUrl);
+      data.history = await getHistorySummary();
+      return data;
+    });
+  } catch (error) {
+    console.error(`[snapshot] scan failed: ${error?.stack || error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    await cp(publicDir, outDir, { recursive: true });
+    const indexPath = join(outDir, "index.html");
+    const html = await readFile(indexPath, "utf8");
+    await writeFile(indexPath, rewriteStaticIndex(html), "utf8");
+    await writeFile(join(outDir, "status.json"), JSON.stringify(payload));
+    await writeFile(
+      join(outDir, "history.json"),
+      JSON.stringify({
+        entries: await readHistoryFiles(),
+        enabled: historyEnabled(),
+      }),
+    );
+  } catch (error) {
+    console.error(`[snapshot] write failed: ${error?.stack || error}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const quota = snapshotRateLimit(metrics);
+  const tightest = quota.tightest || {};
+  console.log(
+    `[snapshot] ${JSON.stringify({
+      ts: new Date().toISOString(),
+      mode: payload.options?.mode || "all",
+      repos: payload.summary?.repos ?? 0,
+      durationMs: Date.now() - startedAt,
+      requests: metrics.requestCount,
+      conditionalHits: metrics.conditionalHits,
+      quotaRemaining: tightest.remaining ?? null,
+      out: outDir,
+    })}`,
+  );
+}
+
+if (isMain) {
+  if (process.argv.includes("--snapshot")) {
+    runSnapshot();
+  } else {
+    server.listen(port, host, () => {
+      const displayHost =
+        host === "0.0.0.0" || host === "::" ? "localhost" : host;
+      console.log(`GitHub Monitor dashboard: http://${displayHost}:${port}`);
+      console.log(
+        `Auth mode: ${APP_AUTH_ENABLED ? `GitHub App (id ${GITHUB_APP_ID})` : "Personal access token"}`,
+      );
+      console.log(
+        `Dependabot queue cleanup: ${DEPENDABOT_QUEUE_THRESHOLD > 0 ? `enabled at ${DEPENDABOT_QUEUE_THRESHOLD} queued runs` : "disabled"}`,
+      );
+      scheduleDependabotQueueScan(0);
+    });
+  }
+}
+
+// Last-resort guards: log loudly and keep serving instead of letting a stray
+// async error take the whole dashboard down.
+process.on("uncaughtException", (error) => {
+  console.error(`[fatal:uncaughtException] ${error?.stack || error}`);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error(`[fatal:unhandledRejection] ${reason?.stack || reason}`);
+});
 
 export {
   SECURITY_HEADERS,

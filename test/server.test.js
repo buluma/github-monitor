@@ -1,3 +1,4 @@
+import "./helpers/pat-mode.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -53,6 +54,7 @@ import {
   readHistoryFiles,
   summarizeHistory,
   getHistorySummary,
+  rewriteStaticIndex,
   server,
 } from "../server.js";
 
@@ -2866,4 +2868,60 @@ test("history endpoints return empty when disabled", async () => {
     if (previousToken == null) delete process.env.GITHUB_TOKEN;
     else process.env.GITHUB_TOKEN = previousToken;
   }
+});
+
+test("/api/client/state endpoint supports GET, POST, and DELETE", async () => {
+  const previousFetch = globalThis.fetch;
+  const testServer = await new Promise((resolve) => {
+    const listener = server.listen(0, "127.0.0.1", () => resolve(listener));
+  });
+
+  try {
+    const { port } = testServer.address();
+    const base = `http://127.0.0.1:${port}`;
+
+    // 1. Initial GET
+    const getRes = await previousFetch(`${base}/api/client/state`);
+    assert.equal(getRes.status, 200);
+
+    // 2. POST update
+    const postRes = await previousFetch(`${base}/api/client/state`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { theme: "dark" } }),
+    });
+    assert.equal(postRes.status, 200);
+    const postData = await postRes.json();
+    assert.equal(postData.ok, true);
+    assert.deepEqual(postData.state.settings, { theme: "dark" });
+
+    // 3. GET verify
+    const getRes2 = await previousFetch(`${base}/api/client/state`);
+    const state2 = await getRes2.json();
+    assert.deepEqual(state2.settings, { theme: "dark" });
+
+    // 4. DELETE clear
+    const delRes = await previousFetch(`${base}/api/client/state`, {
+      method: "DELETE",
+    });
+    assert.equal(delRes.status, 200);
+
+    const getRes3 = await previousFetch(`${base}/api/client/state`);
+    const state3 = await getRes3.json();
+    assert.deepEqual(state3, {});
+  } finally {
+    await new Promise((resolve, reject) =>
+      testServer.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("rewriteStaticIndex inserts meta tag linearly and rewrites absolute asset paths", () => {
+  const htmlInput = '<!DOCTYPE html><head lang="en"><script src="/app.js"></script><link href="/styles.css"></head>';
+  const rewritten = rewriteStaticIndex(htmlInput);
+  assert.ok(rewritten.includes('<meta name="gh-monitor-static" content="1" />'));
+  assert.ok(rewritten.includes('src="app.js"'));
+  assert.ok(rewritten.includes('href="styles.css"'));
+  // Ensure idempotency
+  assert.equal(rewriteStaticIndex(rewritten), rewritten);
 });

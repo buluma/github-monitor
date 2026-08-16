@@ -416,10 +416,65 @@ function loadNotified() {
   }
 }
 
+async function postClientStateUpdate(updates) {
+  try {
+    await fetch("/api/client/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+  } catch {}
+}
+
+async function syncClientStateWithServer() {
+  try {
+    const res = await fetch("/api/client/state");
+    if (!res.ok) return;
+    const serverState = await res.json();
+    if (!serverState || typeof serverState !== "object") return;
+
+    if (serverState.settings && typeof serverState.settings === "object") {
+      state.settings = { ...state.settings, ...serverState.settings };
+      state.mode = serverState.settings.mode || state.mode;
+      state.view = serverState.settings.view || state.view;
+      state.traceFilter = serverState.settings.traceFilter || state.traceFilter;
+      state.filter = serverState.settings.filter ?? state.filter;
+      state.theme = serverState.settings.theme || state.theme;
+      state.autoMerge = Boolean(serverState.settings.autoMerge);
+      state.notifications = Boolean(serverState.settings.notifications);
+      state.owners = Array.isArray(serverState.settings.owners)
+        ? serverState.settings.owners
+        : state.owners;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serverState.settings));
+    }
+    if (Array.isArray(serverState.inbox)) {
+      state.inbox = serverState.inbox;
+      localStorage.setItem(INBOX_KEY, JSON.stringify(state.inbox));
+    }
+    if (Array.isArray(serverState.traceCache)) {
+      state.traceCache = serverState.traceCache;
+      localStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(state.traceCache));
+    }
+    if (serverState.phaseAges && typeof serverState.phaseAges === "object") {
+      state.phaseAges = serverState.phaseAges;
+      localStorage.setItem(PHASE_AGE_KEY, JSON.stringify(state.phaseAges));
+    }
+    if (serverState.notified && typeof serverState.notified === "object") {
+      state.notified = serverState.notified;
+      localStorage.setItem(NOTIFIED_KEY, JSON.stringify(state.notified));
+    }
+    if (serverState.dismissed && typeof serverState.dismissed === "object") {
+      state.dismissed = serverState.dismissed;
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(state.dismissed));
+    }
+  } catch {}
+}
+
 function saveNotified() {
   try {
     state.notified = pruneNotified(state.notified);
     localStorage.setItem(NOTIFIED_KEY, JSON.stringify(state.notified));
+    postClientStateUpdate({ notified: state.notified });
   } catch {}
 }
 
@@ -460,12 +515,14 @@ function savePhaseAges() {
   try {
     state.phaseAges = prunePhaseAges(state.phaseAges);
     localStorage.setItem(PHASE_AGE_KEY, JSON.stringify(state.phaseAges));
+    postClientStateUpdate({ phaseAges: state.phaseAges });
   } catch {}
 }
 
 function saveDismissed() {
   try {
     localStorage.setItem(DISMISSED_KEY, JSON.stringify(state.dismissed));
+    postClientStateUpdate({ dismissed: state.dismissed });
   } catch {}
 }
 
@@ -567,10 +624,12 @@ function pruneTraceCache(items) {
 function saveInbox() {
   try {
     state.inbox = pruneInbox(state.inbox);
+    const sliced = state.inbox.slice(0, INBOX_MAX);
     localStorage.setItem(
       INBOX_KEY,
-      JSON.stringify(state.inbox.slice(0, INBOX_MAX)),
+      JSON.stringify(sliced),
     );
+    postClientStateUpdate({ inbox: sliced });
   } catch {}
 }
 
@@ -578,6 +637,7 @@ function saveTraceCache() {
   try {
     state.traceCache = pruneTraceCache(state.traceCache);
     localStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(state.traceCache));
+    postClientStateUpdate({ traceCache: state.traceCache });
   } catch {}
 }
 
@@ -602,19 +662,21 @@ function prunePhaseAges(ages) {
 
 function persist() {
   try {
+    const settings = {
+      mode: state.mode,
+      view: state.view,
+      traceFilter: state.traceFilter,
+      filter: state.filter,
+      theme: state.theme,
+      autoMerge: state.autoMerge,
+      notifications: state.notifications,
+      owners: state.owners,
+    };
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({
-        mode: state.mode,
-        view: state.view,
-        traceFilter: state.traceFilter,
-        filter: state.filter,
-        theme: state.theme,
-        autoMerge: state.autoMerge,
-        notifications: state.notifications,
-        owners: state.owners,
-      }),
+      JSON.stringify(settings),
     );
+    postClientStateUpdate({ settings });
   } catch {}
 }
 
@@ -2087,11 +2149,79 @@ function render() {
     : filtered.filter((row) => !rowIsDismissed(row));
   syncFilterUI(rows.length, all.length);
 
-  const body = rows.length
-    ? rows.map((row) => renderRow(row, state.view, view)).join("")
-    : renderEmptyState(view, all.length, data);
-  const dismissBar = renderDismissBar(dismissedCount, activeDismissable);
-  els.content.innerHTML = `${state.view === "pipelineTraces" ? renderTraceFilterBar(data) : ""}${dismissBar}${body}`;
+  const chromeHtml = `${state.view === "pipelineTraces" ? renderTraceFilterBar(data) : ""}${renderDismissBar(dismissedCount, activeDismissable)}`;
+  paintList(rows, view, all.length, data, chromeHtml);
+}
+
+// —————————————————————— PROGRESSIVE LIST RENDER ——————————————————————
+// Building a whole lane as one innerHTML string stalls the main thread once a
+// view holds hundreds of rows (663 repos and growing). Instead the row HTML is
+// inserted in small batches across animation frames, so the page stays
+// interactive while a big list fills in. The first batch is inserted
+// synchronously so small lanes render exactly as before, and a generation token
+// cancels stale batches whenever a newer render starts (filter keystroke,
+// refresh, view switch, dismiss toggle). Row events are delegated on
+// #content, so batches added after the fact behave identically.
+const RENDER_CHUNK_ROWS = 40;
+const RENDER_CHUNK_MS = 10;
+let renderGeneration = 0;
+let renderTimer = null;
+
+function paintList(rows, view, allCount, data, chromeHtml) {
+  renderGeneration += 1;
+  const generation = renderGeneration;
+  if (renderTimer) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+
+  els.content.innerHTML = chromeHtml;
+
+  if (!rows.length) {
+    els.content.insertAdjacentHTML(
+      "beforeend",
+      renderEmptyState(view, allCount, data),
+    );
+    return;
+  }
+
+  const note = document.createElement("div");
+  note.className = "rendering-note";
+  note.setAttribute("aria-live", "polite");
+
+  let index = 0;
+  const batchHtml = (start, end) =>
+    rows
+      .slice(start, end)
+      .map((row) => renderRow(row, state.view, view))
+      .join("");
+
+  // First batch synchronously: small lanes keep today's exact behavior.
+  els.content.insertAdjacentHTML("beforeend", batchHtml(0, RENDER_CHUNK_ROWS));
+  index += Math.min(RENDER_CHUNK_ROWS, rows.length);
+  if (index >= rows.length) return; // small lane: already complete
+
+  els.content.appendChild(note);
+  note.textContent = `Rendering ${rows.length - index} more rows…`;
+
+  const step = () => {
+    if (generation !== renderGeneration) return; // superseded, drop quietly
+    const batch = rows.slice(index, index + RENDER_CHUNK_ROWS);
+    index += batch.length;
+    const template = document.createElement("template");
+    template.innerHTML = batch
+      .map((row) => renderRow(row, state.view, view))
+      .join("");
+    els.content.insertBefore(template.content, note);
+    if (index < rows.length) {
+      note.textContent = `Rendering ${rows.length - index} more rows…`;
+      renderTimer = setTimeout(step, RENDER_CHUNK_MS);
+    } else {
+      note.remove();
+      renderTimer = null;
+    }
+  };
+  renderTimer = setTimeout(step, RENDER_CHUNK_MS);
 }
 
 // Returns stable dismiss keys for a dismissable row, else an empty array.
@@ -3662,10 +3792,15 @@ document.addEventListener("click", (event) => {
   closeInbox();
 });
 
+// Debounce filter keystrokes: each one previously rebuilt the whole lane, and
+// with hundreds of rows the repeated chunked rebuilds would thrash. A short
+// debounce coalesces bursts of typing into a single render.
+let filterRenderTimer = null;
 els.filter.addEventListener("input", (event) => {
   state.filter = event.target.value;
   persist();
-  render();
+  clearTimeout(filterRenderTimer);
+  filterRenderTimer = setTimeout(render, 120);
 });
 
 els.filterClear.addEventListener("click", () => {
@@ -3764,6 +3899,7 @@ ensureCountdownTimer();
 // Paint the last-known dashboard from the cache first, then let the fresh scan
 // replace it. Reloading never shows a blank screen again.
 async function boot() {
+  await syncClientStateWithServer();
   const cachedData = await loadStatusDataCache();
   if (cachedData) {
     state.data = cachedData;
