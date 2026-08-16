@@ -54,6 +54,7 @@ import {
   readHistoryFiles,
   summarizeHistory,
   getHistorySummary,
+  rewriteStaticIndex,
   server,
 } from "../server.js";
 
